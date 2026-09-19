@@ -1,0 +1,15 @@
+id,name,elevation_m,drainage_mm_h,initial_water_m,population,rainfall_factor,neighbors,is_coastal
+ambattur,Ambattur,18.0,20.0,0.02,310000,0.92,madhavaram;kodambakkam,0
+madhavaram,Madhavaram,11.0,16.0,0.04,150000,0.95,ambattur;tondiarpet;anna_nagar,0
+tondiarpet,Tondiarpet,4.0,14.0,0.06,240000,1.02,madhavaram;perambur,1
+kodambakkam,Kodambakkam,14.0,19.0,0.03,210000,0.94,ambattur;anna_nagar;pallavaram,0
+anna_nagar,Anna Nagar,10.0,22.0,0.03,280000,0.96,madhavaram;kodambakkam;perambur;t_nagar,0
+perambur,Perambur,8.0,15.0,0.05,230000,0.98,tondiarpet;anna_nagar;mylapore,0
+pallavaram,Pallavaram,16.0,18.0,0.03,180000,0.97,kodambakkam;t_nagar;tambaram,0
+t_nagar,T. Nagar,9.0,20.0,0.04,180000,1.00,anna_nagar;pallavaram;mylapore;guindy,0
+mylapore,Mylapore,5.0,16.0,0.06,170000,1.05,perambur;t_nagar;adyar,1
+tambaram,Tambaram,22.0,24.0,0.02,200000,0.93,pallavaram;guindy;velachery,0
+guindy,Guindy,8.0,18.0,0.05,120000,1.02,t_nagar;tambaram;adyar;velachery,0
+adyar,Adyar,4.0,12.0,0.08,250000,1.08,mylapore;guindy;velachery;sholinganallur,1
+velachery,Velachery,5.0,8.0,0.09,220000,1.10,tambaram;guindy;adyar;sholinganallur,0
+sholinganallur,Sholinganallur,6.0,10.0,0.07,190000,1.12,adyar;velachery,1

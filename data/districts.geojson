@@ -1,0 +1,118 @@
+{
+  "type": "FeatureCollection",
+  "name": "chennai_flowshield_districts",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "id": "ambattur", "name": "Ambattur" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.118, 13.122], [80.178, 13.122], [80.178, 13.175], [80.118, 13.175], [80.118, 13.122]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "madhavaram", "name": "Madhavaram" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.178, 13.122], [80.242, 13.122], [80.242, 13.175], [80.178, 13.175], [80.178, 13.122]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "tondiarpet", "name": "Tondiarpet" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.242, 13.122], [80.308, 13.122], [80.318, 13.148], [80.308, 13.175], [80.242, 13.175], [80.242, 13.122]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "kodambakkam", "name": "Kodambakkam" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.118, 13.07], [80.178, 13.07], [80.178, 13.122], [80.118, 13.122], [80.118, 13.07]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "anna_nagar", "name": "Anna Nagar" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.178, 13.07], [80.242, 13.07], [80.242, 13.122], [80.178, 13.122], [80.178, 13.07]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "perambur", "name": "Perambur" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.242, 13.07], [80.308, 13.07], [80.308, 13.122], [80.242, 13.122], [80.242, 13.07]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "pallavaram", "name": "Pallavaram" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.118, 13.018], [80.178, 13.018], [80.178, 13.07], [80.118, 13.07], [80.118, 13.018]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "t_nagar", "name": "T. Nagar" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.178, 13.018], [80.242, 13.018], [80.242, 13.07], [80.178, 13.07], [80.178, 13.018]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "mylapore", "name": "Mylapore" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.242, 13.018], [80.308, 13.018], [80.318, 13.044], [80.308, 13.07], [80.242, 13.07], [80.242, 13.018]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "tambaram", "name": "Tambaram" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.118, 12.962], [80.178, 12.962], [80.178, 13.018], [80.118, 13.018], [80.118, 12.962]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "guindy", "name": "Guindy" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.178, 12.962], [80.242, 12.962], [80.242, 13.018], [80.178, 13.018], [80.178, 12.962]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "adyar", "name": "Adyar" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.242, 12.962], [80.308, 12.962], [80.318, 12.99], [80.308, 13.018], [80.242, 13.018], [80.242, 12.962]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "velachery", "name": "Velachery" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.118, 12.888], [80.242, 12.888], [80.242, 12.962], [80.118, 12.962], [80.118, 12.888]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "sholinganallur", "name": "Sholinganallur" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[80.242, 12.888], [80.308, 12.888], [80.318, 12.925], [80.308, 12.962], [80.242, 12.962], [80.242, 12.888]]]
+      }
+    }
+  ]
+}
