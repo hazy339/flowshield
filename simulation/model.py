@@ -56,6 +56,8 @@ class SimulationResult:
     failed_districts: tuple[str, ...] = ()
     blocked_edges: tuple[tuple[str, str], ...] = ()
     labels: dict[int, str] = field(default_factory=lambda: dict(STATUS_LABELS))
+    edge_flow: np.ndarray = field(default_factory=lambda: np.empty((0, 0), dtype=float))
+    edge_defs: list[tuple[int, int]] = field(default_factory=list)
 
     @property
     def n_steps(self) -> int:
@@ -116,7 +118,8 @@ def run_simulation(city: City, cfg: SimConfig) -> SimulationResult:
     n = city.n
     steps = max(2, int(round(cfg.duration_h / cfg.dt_h)) + 1)
     times = np.linspace(0.0, cfg.duration_h, steps)
-    dt = cfg.dt_h
+    dt_h = cfg.dt_h
+    dt_s = dt_h * 3600.0
 
     elev = np.asarray(city.elevation, dtype=float)
     drain_cap = np.asarray(city.drainage_mm_h, dtype=float) / 1000.0 * max(0.0, cfg.drainage_scale)
@@ -132,6 +135,10 @@ def run_simulation(city: City, cfg: SimConfig) -> SimulationResult:
 
     water = np.zeros((steps, n), dtype=float)
     water[0] = np.asarray(city.initial_water, dtype=float) * max(0.0, cfg.initial_scale)
+    areas_m2 = np.asarray(city.area_m2, dtype=float)
+    areas_m2 = np.maximum(areas_m2, 1e-9)
+    edge_flow = np.zeros((steps, len(edges)), dtype=float)
+    edge_defs = [(i, j) for i, j, _ in edges]
 
     rain_m_h = (cfg.rainfall_mm_h / 1000.0) * cfg.runoff * rain_factor
     infil_m_h = cfg.infiltration_mm_h / 1000.0
@@ -140,27 +147,42 @@ def run_simulation(city: City, cfg: SimConfig) -> SimulationResult:
     w = water[0].copy()
     for t in range(1, steps):
         if times[t] <= rain_until + 1e-9:
-            w = w + rain_m_h * dt
-        drain = drain_cap * (1.0 - failed) * dt
-        w = np.maximum(0.0, w - drain - infil_m_h * dt)
+            w = w + rain_m_h * dt_h
+        drain = drain_cap * (1.0 - failed) * dt_h
+        w = np.maximum(0.0, w - drain - infil_m_h * dt_h)
 
         surface = elev + w
         transfer = np.zeros(n, dtype=float)
-        for i, j, k in edges:
+        remaining_transfer_volume = np.asarray(w, dtype=float) * areas_m2 * cfg.max_transfer_frac
+        for e_idx, (i, j, k) in enumerate(edges):
             H = surface[i] - surface[j]
             if H > 0:
-                flux = k * np.sqrt(H) * dt
-                flux = min(flux, w[i] * cfg.max_transfer_frac)
+                F_ij = k * np.sqrt(H)
+                max_flow = remaining_transfer_volume[i] / dt_s
+                F_ij = min(F_ij, max_flow)
             elif H < 0:
-                flux = -k * np.sqrt(-H) * dt
-                flux = max(flux, -w[j] * cfg.max_transfer_frac)
+                F_ij = -k * np.sqrt(-H)
+                max_flow = remaining_transfer_volume[j] / dt_s
+                F_ij = max(F_ij, -max_flow)
             else:
-                flux = 0.0
-            transfer[i] -= flux
-            transfer[j] += flux
+                F_ij = 0.0
+
+            if F_ij > 0.0:
+                if F_ij > remaining_transfer_volume[i] / dt_s:
+                    F_ij = remaining_transfer_volume[i] / dt_s
+            elif F_ij < 0.0:
+                if F_ij < -remaining_transfer_volume[j] / dt_s:
+                    F_ij = -remaining_transfer_volume[j] / dt_s
+
+            phi_ij = F_ij * dt_s
+            transfer[i] -= phi_ij / areas_m2[i]
+            transfer[j] += phi_ij / areas_m2[j]
+            remaining_transfer_volume[i] -= max(phi_ij, 0.0)
+            remaining_transfer_volume[j] -= max(-phi_ij, 0.0)
+            edge_flow[t, e_idx] = F_ij
         w = np.maximum(0.0, w + transfer)
 
-        sea_out = cfg.coastal_sink * np.maximum(w, 0.0) * coastal * dt
+        sea_out = cfg.coastal_sink * np.maximum(w, 0.0) * coastal * dt_h
         w = np.maximum(0.0, w - sea_out)
         water[t] = w
 
@@ -197,4 +219,6 @@ def run_simulation(city: City, cfg: SimConfig) -> SimulationResult:
         drainage_mm_h=np.asarray(city.drainage_mm_h, dtype=float),
         failed_districts=cfg.failed_districts,
         blocked_edges=cfg.blocked_edges,
+        edge_flow=edge_flow,
+        edge_defs=edge_defs,
     )
