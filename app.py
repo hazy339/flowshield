@@ -1097,9 +1097,8 @@ with top_r:
             )
         with s2:
             study = st.selectbox(
-                "Study area",
+                "Search cities",
                 REGION_LABELS,
-                label_visibility="collapsed",
                 key="study_area_label",
             )
         with s3:

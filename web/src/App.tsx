@@ -147,7 +147,11 @@ function App() {
           </div>
         </div>
         <div className="top-controls">
+          <label className="city-search-label" htmlFor="city-select">
+            Search cities
+          </label>
           <select
+            id="city-select"
             value={regionId}
             onChange={(e) => {
               const id = e.target.value

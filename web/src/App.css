@@ -64,7 +64,27 @@ body {
   margin-top: 0.25rem;
 }
 
-.top-controls select,
+.top-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: min(22rem, 100%);
+}
+
+.city-search-label {
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.top-controls select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .panel select,
 .timeline input[type='range'] {
   width: 100%;
