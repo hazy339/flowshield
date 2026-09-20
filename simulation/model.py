@@ -30,11 +30,11 @@ class SimConfig:
     blocked_edges: tuple[tuple[str, str], ...] = ()
     conductivity: float = 0.16
     canal_conductivity: float = 0.48
-    warning_m: float = 0.30
-    critical_m: float = 0.80
-    runoff: float = 0.85
-    infiltration_mm_h: float = 1.2
-    coastal_sink: float = 0.06
+    warning_m: float = 0.22
+    critical_m: float = 0.60
+    runoff: float = 0.92
+    infiltration_mm_h: float = 0.6
+    coastal_sink: float = 0.035
     max_transfer_frac: float = 0.38
 
 
@@ -88,6 +88,22 @@ class SimulationResult:
         if finite.size == 0:
             return None
         return float(np.min(finite))
+
+    def peak_hazard_index(self) -> int:
+        """Timeline index with the most severe map-wide flooding."""
+        best_t = 0
+        best_score = (-1.0, -1.0, -1.0)
+        for t in range(self.n_steps):
+            row = self.status[t]
+            score = (
+                float(np.sum(row == CRITICAL)),
+                float(np.sum(row == WARNING)),
+                float(np.mean(self.water[t])),
+            )
+            if score > best_score:
+                best_score = score
+                best_t = t
+        return best_t
 
 
 def _blocked_set(city: City, blocked_edges: tuple[tuple[str, str], ...]) -> set[tuple[int, int]]:

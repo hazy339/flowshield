@@ -267,13 +267,11 @@ def edge_label(blocked_label: str, channel_edge: dict) -> tuple[tuple[str, str],
 def apply_preset_to_state(preset_name: str, city) -> None:
     cfg = apply_preset(preset_name, city)
     st.session_state.rainfall = float(cfg.rainfall_mm_h)
-    rain_min = float(min(360.0, max(30.0, cfg.duration_h * 60.0)))
-    if cfg.duration_h >= 12:
-        rain_min = 150.0 if preset_name == "Heavy rainfall" else min(180.0, rain_min)
-    st.session_state.rain_duration_min = rain_min
+    rain_h = cfg.rain_duration_h if cfg.rain_duration_h is not None else cfg.duration_h
+    st.session_state.rain_duration_min = float(min(1440.0, max(30.0, rain_h * 60.0)))
     st.session_state.sim_duration_min = float(min(2880.0, max(240.0, cfg.duration_h * 60.0)))
-    st.session_state.drainage_scale = 1.0
-    st.session_state.initial_scale = 1.0
+    st.session_state.drainage_scale = float(cfg.drainage_scale)
+    st.session_state.initial_scale = float(cfg.initial_scale)
     st.session_state.failed_names = [city.name_of(did) for did in cfg.failed_districts]
     labels, edges = channel_maps(city)
     blocked = "None"
@@ -284,6 +282,9 @@ def apply_preset_to_state(preset_name: str, city) -> None:
                 blocked = label
                 break
     st.session_state.blocked_label = blocked if blocked in labels else "None"
+    st.session_state.cfg_key = None
+    st.session_state.playing = False
+    st.session_state.seek_peak = True
 
 
 def switch_region(region_id: str) -> None:
@@ -296,18 +297,18 @@ def switch_region(region_id: str) -> None:
     st.session_state.cfg_key = None
     st.session_state.t_idx = 0
     st.session_state.playing = False
-    apply_preset_to_state(st.session_state.get("preset_name", "Heavy rainfall"), city)
+    apply_preset_to_state(st.session_state.get("preset_name", "Extreme flood"), city)
 
 
 def init_state() -> None:
     defaults = {
         "region_id": "chennai",
-        "preset_name": "Heavy rainfall",
-        "rainfall": 72.0,
-        "rain_duration_min": 150.0,
+        "preset_name": "Extreme flood",
+        "rainfall": 140.0,
+        "rain_duration_min": 960.0,
         "sim_duration_min": 1440.0,
-        "drainage_scale": 1.0,
-        "initial_scale": 1.0,
+        "drainage_scale": 0.55,
+        "initial_scale": 1.6,
         "failed_names": [],
         "blocked_label": "None",
         "selected_region": "Velachery",
@@ -315,18 +316,24 @@ def init_state() -> None:
         "playing": False,
         "play_speed": 1,
         "t_idx": 0,
-        "last_preset": "Heavy rainfall",
+        "last_preset": "Extreme flood",
         "search_query": "",
-        "show_grid": True,
+        "show_grid": False,
         "show_labels": True,
         "study_area_label": "Chennai, Tamil Nadu",
+        "seek_peak": True,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-    st.session_state.rain_duration_min = float(min(360.0, max(30.0, st.session_state.rain_duration_min)))
+    if st.session_state.get("haz_v2") != 3:
+        st.session_state.haz_v2 = 3
+        st.session_state.show_grid = False
+        apply_preset_to_state(st.session_state.get("preset_name", "Extreme flood"), get_city())
+        st.session_state.initialized = True
+    st.session_state.rain_duration_min = float(min(1440.0, max(30.0, st.session_state.rain_duration_min)))
     st.session_state.sim_duration_min = float(min(2880.0, max(60.0, st.session_state.sim_duration_min)))
-    if "initialized" not in st.session_state:
+    if "initialized" not in st.session_state or not st.session_state.initialized:
         apply_preset_to_state(st.session_state.preset_name, get_city())
         st.session_state.initialized = True
 
@@ -363,7 +370,12 @@ def ensure_result(city) -> SimulationResult:
     if st.session_state.get("cfg_key") != key:
         st.session_state.result = run_simulation(city, cfg)
         st.session_state.cfg_key = key
-        st.session_state.t_idx = min(st.session_state.get("t_idx", 0), st.session_state.result.n_steps - 1)
+        st.session_state.seek_peak = True
+    if st.session_state.get("seek_peak"):
+        st.session_state.t_idx = st.session_state.result.peak_hazard_index()
+        st.session_state.seek_peak = False
+    else:
+        st.session_state.t_idx = min(int(st.session_state.get("t_idx", 0)), st.session_state.result.n_steps - 1)
     return st.session_state.result
 
 
@@ -501,8 +513,8 @@ with left:
             st.rerun()
         st.caption(PRESETS[preset].description)
 
-        st.slider("Rainfall intensity", 5.0, 120.0, step=1.0, key="rainfall", format="%.0f mm/hr")
-        st.slider("Rain duration", 30.0, 360.0, step=15.0, key="rain_duration_min", format="%.0f min")
+        st.slider("Rainfall intensity", 5.0, 180.0, step=1.0, key="rainfall", format="%.0f mm/hr")
+        st.slider("Rain duration", 30.0, 1440.0, step=15.0, key="rain_duration_min", format="%.0f min")
         st.slider("Drainage capacity", 0.25, 2.0, step=0.05, key="drainage_scale", format="x%.2f")
         st.slider("Initial water level", 0.0, 2.0, step=0.05, key="initial_scale", format="x%.2f")
         st.slider("Sim duration", 60.0, 2880.0, step=30.0, key="sim_duration_min", format="%.0f min")
@@ -514,7 +526,7 @@ with left:
         if st.button("Run simulation", type="primary", width="stretch"):
             st.session_state.cfg_key = None
             st.session_state.playing = False
-            st.session_state.t_idx = 0
+            st.session_state.seek_peak = True
             st.rerun()
 
         with st.expander("Model equations", expanded=False):
@@ -526,7 +538,7 @@ with left:
                 2. **Drain** · \(w \leftarrow \max(0,\, w - D\cdot s\cdot \Delta t - I\cdot \Delta t)\)  
                 3. **Flow** · \(H = z + w\), flux \(k(H_i-H_j)\Delta t\) along edges  
                 4. **Sea / river sink** on coastal / riverfront districts  
-                5. **Class** · Safe < 0.30 m · Warning · Critical ≥ 0.80 m
+                5. **Class** · Safe < 0.22 m · Warning · Critical ≥ 0.60 m
                 """
             )
 
@@ -543,7 +555,7 @@ with center:
     with m2:
         st.checkbox("Grid lines", key="show_grid")
     with m3:
-        st.checkbox("District names", key="show_labels")
+        st.checkbox("Hazard labels", key="show_labels")
 
     sel_name = st.session_state.selected_region
     sel_id = CITY.ids[CITY.names.index(sel_name)] if sel_name in CITY.names else None
