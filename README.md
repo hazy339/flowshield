@@ -13,6 +13,8 @@ Flood simulation and early-warning dashboard for Indian city basins (Chennai, Mu
 5. Scroll below the map for **Region hydrology**: water level over time, water sources, and neighbour movement.
 6. Use **Trace Water Source** / **What-if Analysis** on the selected-region panel when you need a deeper look.
 
+For a full spoken demo (requirements → features, video checklist), see [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
+
 ## Run locally
 
 Python 3.10+ recommended.
