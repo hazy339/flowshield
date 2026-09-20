@@ -2,7 +2,7 @@
 
 **Predict the flood. Protect the future.**
 
-Flood simulation and early-warning dashboard for a Chennai-style coastal basin. The app overlays districts on OpenStreetMap, evolves water levels from rainfall, terrain, drainage and channel flow, then classifies each region as Safe, Warning or Critical.
+Flood simulation and early-warning dashboard for Indian city basins (Chennai, Mumbai, Delhi, Kolkata, Guwahati, Hyderabad, Bengaluru, plus high-risk basins such as Patna, Kochi, Surat, Visakhapatnam, Bhubaneswar, Srinagar, Alappuzha, Vadodara, and Mangaluru). Districts overlay Google Earth satellite imagery; water levels evolve from rainfall, terrain, drainage and channel flow.
 
 ## Demo flow
 
@@ -24,7 +24,7 @@ py -3 -m streamlit run app.py
 
 The dashboard opens at [http://localhost:8501](http://localhost:8501).
 
-Map tiles come from **OpenStreetMap** (no Google Maps API key required). An internet connection is needed the first time tiles load.
+Map tiles use **Google Earth-style satellite / hybrid** imagery. An internet connection is needed for tiles to load.
 
 ## What the model uses
 
@@ -47,7 +47,7 @@ app.py                      Streamlit dashboard
 simulation/model.py         Hydrology engine and risk classification
 simulation/city.py          District graph, canals, GeoJSON loader
 simulation/scenarios.py     Normal / heavy / failure / blocked presets
-simulation/viz.py           OpenStreetMap overlays
+simulation/viz.py           Google Earth satellite map overlays
 data/districts.geojson      District polygons
 data/district_attributes.csv Elevation, drainage, population, neighbours
 ```
