@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -70,6 +71,37 @@ def _polygon_centroid(ring: list[list[float]]) -> tuple[float, float]:
     return (sum(ys) / len(ys), sum(xs) / len(xs))
 
 
+EARTH_RADIUS_M = 6_371_000.0
+
+
+def _polygon_area_m2(geometry: dict) -> float:
+    geom_type = geometry.get("type")
+    if geom_type == "Polygon":
+        rings = geometry.get("coordinates", [])
+        total = 0.0
+        for ring in rings:
+            if len(ring) < 4:
+                continue
+            lat0, lon0 = _polygon_centroid(ring)
+            projected: list[tuple[float, float]] = []
+            for lon, lat in ring[:-1]:
+                x = EARTH_RADIUS_M * math.radians(lon - lon0) * math.cos(math.radians(lat0))
+                y = EARTH_RADIUS_M * math.radians(lat - lat0)
+                projected.append((x, y))
+
+            area = 0.0
+            for i in range(len(projected)):
+                x1, y1 = projected[i]
+                x2, y2 = projected[(i + 1) % len(projected)]
+                area += x1 * y2 - x2 * y1
+            total += abs(area / 2.0)
+        return total
+    if geom_type == "MultiPolygon":
+        polygons = geometry.get("coordinates", [])
+        return sum(_polygon_area_m2({"type": "Polygon", "coordinates": polygon}) for polygon in polygons)
+    return 0.0
+
+
 @dataclass
 class City:
     ids: list[str]
@@ -84,6 +116,7 @@ class City:
     canal_edges: list[tuple[int, int]]
     geojson: dict
     centroids: dict[str, tuple[float, float]]
+    area_m2: list[float] = field(default_factory=list)
     index_of: dict[str, int] = field(default_factory=dict)
     center: tuple[float, float] = (13.04, 80.22)
     bounds: list[list[float]] = field(default_factory=list)
@@ -175,6 +208,8 @@ def load_city(data_dir: Path | None = None) -> City:
                 seen.add(key)
                 canal_edges.append(key)
 
+    area_m2 = [_polygon_area_m2(feature["geometry"]) for feature in geojson["features"]]
+
     return City(
         ids=ids,
         names=names,
@@ -188,4 +223,5 @@ def load_city(data_dir: Path | None = None) -> City:
         canal_edges=canal_edges,
         geojson=geojson,
         centroids=centroids,
+        area_m2=area_m2,
     )
