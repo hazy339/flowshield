@@ -395,10 +395,125 @@ def _nearest_path_index(path: list[list[float]], lat: float, lon: float) -> int:
     return best_i
 
 
+def _point_in_ring(lon: float, lat: float, ring: list) -> bool:
+    """Ray-cast point-in-polygon. ring vertices are [lon, lat]."""
+    inside = False
+    n = len(ring)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = float(ring[i][0]), float(ring[i][1])
+        xj, yj = float(ring[j][0]), float(ring[j][1])
+        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-15) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _point_on_land(city: City, lat: float, lon: float) -> bool:
+    for feat in city.geojson["features"]:
+        geom = feat.get("geometry") or {}
+        gtype = geom.get("type")
+        coords = geom.get("coordinates")
+        if not coords:
+            continue
+        if gtype == "Polygon":
+            if _point_in_ring(lon, lat, coords[0]):
+                return True
+        elif gtype == "MultiPolygon":
+            for poly in coords:
+                if poly and _point_in_ring(lon, lat, poly[0]):
+                    return True
+    return False
+
+
+def _sea_axis(city: City) -> tuple[str, float]:
+    """
+    Detect which map axis points toward the sea.
+    Returns ('lon'|'lat', +1|-1) where +1 means sea is toward increasing coordinate.
+    """
+    coastal: list[tuple[float, float]] = []
+    inland: list[tuple[float, float]] = []
+    for i, did in enumerate(city.ids):
+        pt = city.centroids[did]
+        (coastal if city.coastal[i] else inland).append(pt)
+    if not coastal or not inland:
+        return ("lon", 1.0)
+    c_lat = sum(p[0] for p in coastal) / len(coastal)
+    c_lon = sum(p[1] for p in coastal) / len(coastal)
+    i_lat = sum(p[0] for p in inland) / len(inland)
+    i_lon = sum(p[1] for p in inland) / len(inland)
+    dlat, dlon = c_lat - i_lat, c_lon - i_lon
+    if abs(dlon) >= abs(dlat):
+        return ("lon", 1.0 if dlon >= 0 else -1.0)
+    return ("lat", 1.0 if dlat >= 0 else -1.0)
+
+
+def _clip_path_away_from_sea(
+    city: City,
+    districts: list[str],
+    coords: list[list[float]],
+) -> list[list[float]]:
+    """
+    Keep only path vertices that stay landward of canal district centroids.
+
+    District polygons often spill into the bay, so point-in-polygon alone still
+    allows offshore corridor points. Never draw past the seaward-most centroid.
+    """
+    if len(coords) < 2:
+        return coords
+    cents = [city.centroids[d] for d in districts if d in city.centroids]
+    if not cents:
+        return []
+    axis, sea_sign = _sea_axis(city)
+    # Small inland pull (~0.5–1 km) so lines stop short of the beach / pier line.
+    buffer = 0.004
+    if axis == "lon":
+        vals = [c[1] for c in cents]
+        limit = (max(vals) - buffer) if sea_sign > 0 else (min(vals) + buffer)
+    else:
+        vals = [c[0] for c in cents]
+        limit = (max(vals) - buffer) if sea_sign > 0 else (min(vals) + buffer)
+
+    kept: list[list[float]] = []
+    for pt in coords:
+        lat, lon = float(pt[0]), float(pt[1])
+        val = lon if axis == "lon" else lat
+        seaward = val > limit if sea_sign > 0 else val < limit
+        if seaward:
+            continue
+        if not _point_on_land(city, lat, lon):
+            continue
+        if not kept or kept[-1][0] != lat or kept[-1][1] != lon:
+            kept.append([lat, lon])
+    return kept
+
+
+def _centroid_corridor(city: City, districts: list[str]) -> list[list[float]]:
+    """Smooth land-only path through district centroids (never into the sea)."""
+    pts: list[list[float]] = []
+    for did in districts:
+        if did not in city.centroids:
+            continue
+        lat, lon = city.centroids[did]
+        pts.append([lat, lon])
+    if len(pts) < 2:
+        return pts
+    out: list[list[float]] = [pts[0]]
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        key = f"{districts[i]}|{districts[i + 1]}"
+        curve = _curved_flow_coords(a[0], a[1], b[0], b[1], key)
+        out.extend(curve[1:])
+    return out
+
+
 def _canal_segment_paths(city: City) -> dict[tuple[str, str], dict]:
     """
     Slice approximate river polylines onto existing canal edges.
     Keys are undirected (id_a, id_b). Display-only — F_ij unchanged.
+    Paths are clipped inland of the coast so AntPath never draws over the sea.
     """
     lookup: dict[tuple[str, str], dict] = {}
     for canal in city.canals:
@@ -407,14 +522,12 @@ def _canal_segment_paths(city: City) -> dict[tuple[str, str], dict]:
             continue
         if canal.get("path"):
             coords = [[float(lat), float(lon)] for lat, lon in canal["path"]]
+            coords = _clip_path_away_from_sea(city, districts, coords)
         else:
             coords = []
-            for did in districts:
-                lat, lon = city.centroids[did]
-                coords.append([lat, lon])
-            if canal.get("sea") and coords:
-                lon, lat = canal["sea"]
-                coords.append([lat, lon])
+        if len(coords) < 2:
+            # Authored corridor is offshore / missing — use centroid Bezier on land.
+            coords = _centroid_corridor(city, districts)
         if len(coords) < 2:
             continue
 
@@ -434,6 +547,11 @@ def _canal_segment_paths(city: City) -> dict[tuple[str, str], dict]:
             segment = coords[i0 : i1 + 1]
             if len(segment) < 2:
                 segment = [coords[i0], coords[min(i0 + 1, len(coords) - 1)]]
+            segment = _clip_path_away_from_sea(city, [a, b], segment)
+            if len(segment) < 2:
+                lat_a, lon_a = city.centroids[a]
+                lat_b, lon_b = city.centroids[b]
+                segment = _curved_flow_coords(lat_a, lon_a, lat_b, lon_b, f"{a}|{b}")
             key = (a, b) if a <= b else (b, a)
             lookup[key] = {
                 "coords": segment,
@@ -450,14 +568,21 @@ def _add_simulated_flows(
     t_idx: int,
     blocked: set[tuple[str, str]],
     selected_id: str | None,
+    highlight_edges: set[tuple[str, str]] | None = None,
 ) -> None:
     """
     Dotted F_ij animation along approximate river corridors only.
     Overland neighbour edges are not drawn (avoids the grid/highway look).
+    Optional highlight_edges dims unrelated canal paths (Trace mode).
     """
     river_group = folium.FeatureGroup(name="River flow", show=True)
     blocked_group = folium.FeatureGroup(name="Blocked channels", show=True)
     canal_paths = _canal_segment_paths(city)
+    highlight = set()
+    if highlight_edges:
+        for a, b in highlight_edges:
+            highlight.add((a, b) if a <= b else (b, a))
+    tracing = bool(highlight)
 
     drawn_blocked: set[tuple[str, str]] = set()
     for a, b in blocked:
@@ -508,7 +633,6 @@ def _add_simulated_flows(
             continue
         seg = canal_paths.get(key)
         if seg is None:
-            # Skip overland graph edges — only river corridors are drawn.
             continue
         f = float(flows[e])
         mag = abs(f)
@@ -525,8 +649,15 @@ def _add_simulated_flows(
             if f >= 0
             else (result.district_names[j], result.district_names[i])
         )
+        is_hi = (not tracing) or (key in highlight)
         weight = min(5.0, 2.0 + 2.8 * style["intensity"] + (0.4 if touches_sel else 0.0))
         opacity = min(0.82, 0.42 + 0.32 * style["intensity"])
+        if tracing and not is_hi:
+            opacity *= 0.18
+            weight *= 0.7
+        elif tracing and is_hi:
+            opacity = min(0.95, opacity + 0.15)
+            weight = min(6.0, weight + 1.2)
         tip = f"{seg['name']}: {src_name} → {dst_name} · {mag:.1f} m³/s"
         AntPath(
             locations=path,
@@ -731,6 +862,7 @@ def build_map(
     show_grid: bool = False,
     show_labels: bool = True,
     selected_id: str | None = None,
+    highlight_edges: set[tuple[str, str]] | None = None,
 ) -> folium.Map:
     fmap = folium.Map(
         location=list(city.center),
@@ -782,6 +914,7 @@ def build_map(
         t_idx,
         blocked=blocked,
         selected_id=selected_id,
+        highlight_edges=highlight_edges,
     )
 
     _add_hazard_pointers(

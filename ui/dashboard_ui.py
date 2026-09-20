@@ -343,6 +343,14 @@ def inject_css() -> None:
         button[kind="secondary"] {
             border: 1px solid var(--line) !important;
         }
+        .fs-collapse-hint {
+            color: var(--muted);
+            font-size: 0.72rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            text-align: center;
+            margin: 0.35rem 0 0.15rem;
+        }
         /* Collapsed scenarios → settings rail (scoped to settings panel only) */
         div[data-testid="stHorizontalBlock"] > div:has(.fs-settings-mark),
         div[data-testid="column"]:has(.fs-settings-mark),
@@ -439,6 +447,71 @@ def inject_css() -> None:
         }
         div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-search-mark) button[kind="primary"]:hover {
             filter: brightness(1.05);
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.45rem;
+            margin: 0.35rem 0 0.55rem;
+        }
+        .info-card {
+            background: rgba(11,18,32,0.72);
+            border: 1px solid rgba(30,224,172,0.14);
+            border-radius: 10px;
+            padding: 0.45rem 0.55rem;
+        }
+        .info-card .k {
+            font-size: 0.66rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+        .info-card .v {
+            font-size: 0.98rem;
+            font-weight: 750;
+            color: var(--text);
+            margin-top: 0.12rem;
+        }
+        .water-gauge {
+            height: 10px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.08);
+            overflow: hidden;
+            margin: 0.35rem 0 0.55rem;
+        }
+        .water-gauge > span {
+            display: block;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #1ee0ac, #4cc3ff, #e74c3c);
+        }
+        .ew-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.5rem;
+            padding: 0.35rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            font-size: 0.82rem;
+        }
+        .ew-row .k { color: var(--muted); }
+        .ew-row .v { color: var(--text); font-weight: 700; }
+        .src-legend-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.78rem;
+            padding: 0.22rem 0;
+            color: #c5d4e8;
+        }
+        .src-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            display: inline-block; margin-right: 0.4rem;
+        }
+        .move-chip {
+            font-size: 0.78rem;
+            color: #c5d4e8;
+            padding: 0.2rem 0;
         }
         </style>
         """,
@@ -543,8 +616,10 @@ def apply_preset_to_state(preset_name: str, city) -> None:
                 break
     st.session_state.blocked_label = blocked if blocked in labels else "None"
     st.session_state.cfg_key = None
+    st.session_state.t_idx = 0
     st.session_state.playing = False
-    st.session_state.seek_peak = True
+    st.session_state.seek_peak = False
+    st.session_state.playback_tick = False
 
 
 def switch_region(region_id: str) -> None:
@@ -583,14 +658,23 @@ def init_state() -> None:
         "study_area_label": "Chennai, Tamil Nadu",
         "seek_peak": True,
         "left_collapsed": False,
+        "trace_active": False,
+        "scenario_label": "Extreme Rainfall",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-    if st.session_state.get("haz_v2") != 3:
-        st.session_state.haz_v2 = 3
+    # One-time migration from older short-storm defaults
+    if st.session_state.get("haz_v2") != 4:
+        st.session_state.haz_v2 = 4
         st.session_state.show_grid = False
-        apply_preset_to_state(st.session_state.get("preset_name", "Extreme flood"), get_city())
+        st.session_state.playing = False
+        st.session_state.playback_tick = False
+        # Keep radio label aligned with active preset after UI redesign
+        pname = st.session_state.get("preset_name", "Extreme flood")
+        if pname in PRESET_TO_SCENARIO:
+            st.session_state.scenario_label = PRESET_TO_SCENARIO[pname]
+        apply_preset_to_state(pname, get_city())
         st.session_state.initialized = True
     st.session_state.rain_duration_min = float(min(1440.0, max(30.0, st.session_state.rain_duration_min)))
     st.session_state.sim_duration_min = float(min(2880.0, max(60.0, st.session_state.sim_duration_min)))
@@ -631,7 +715,10 @@ def ensure_result(city) -> SimulationResult:
     if st.session_state.get("cfg_key") != key:
         st.session_state.result = run_simulation(city, cfg)
         st.session_state.cfg_key = key
-        st.session_state.seek_peak = True
+        st.session_state.t_idx = 0
+        st.session_state.playing = False
+        st.session_state.seek_peak = False
+        st.session_state.playback_tick = False
     if st.session_state.get("seek_peak"):
         st.session_state.t_idx = st.session_state.result.peak_hazard_index()
         st.session_state.seek_peak = False
@@ -666,28 +753,33 @@ def flooding_reasons(city, result: SimulationResult, idx: int, t_idx: int) -> li
     depth = float(result.water[t_idx, idx])
     elev = city.elevation[idx]
     drain = city.drainage_mm_h[idx] * result.config.drainage_scale
+    warn_m = float(result.config.warning_m)
+    crit_m = float(result.config.critical_m)
+    sources = water_source_breakdown(city, result, idx, t_idx)
     if status == 0:
-        reasons.append("Depth is still below the warning threshold (0.30 m).")
+        reasons.append(f"Depth is still below the warning threshold ({warn_m:.2f} m).")
         return reasons
+    if result.config.rainfall_mm_h >= 40:
+        reasons.append(f"High rainfall input ({result.config.rainfall_mm_h:.0f} mm/h).")
+    if sources.get("Net inflow from neighbours", 0.0) > 0.05:
+        reasons.append(
+            f"Significant upstream inflow (~{sources['Net inflow from neighbours']:.2f} m depth-equivalent)."
+        )
+    if drain < max(14.0, result.config.rainfall_mm_h * 0.2):
+        reasons.append(f"Drainage capacity insufficient ({drain:.0f} mm/h).")
     if elev <= sorted(city.elevation)[max(0, city.n // 3)]:
-        reasons.append(f"Low elevation ({elev:.0f} m) lets water pond instead of draining downhill.")
-    if drain < 14:
-        reasons.append(f"Drainage capacity is limited ({drain:.0f} mm/h).")
+        reasons.append(f"Low elevation ({elev:.0f} m) promotes ponding.")
     if city.ids[idx] in result.failed_districts:
         reasons.append("Drainage pumps have failed in this district.")
     for a, b in result.blocked_edges:
         if city.ids[idx] in (a, b):
             reasons.append("A connected drainage channel is blocked, trapping runoff.")
             break
-    if result.config.rainfall_mm_h >= 40:
-        reasons.append(f"Heavy rainfall ({result.config.rainfall_mm_h:.0f} mm/h) exceeds local removal rate.")
-    if depth >= result.config.critical_m:
-        reasons.append(f"Water depth has reached critical ({depth:.2f} m ≥ 0.80 m).")
-    elif depth >= result.config.warning_m:
-        reasons.append(f"Water depth is in warning range ({depth:.2f} m).")
-    if not reasons:
-        reasons.append("Click another district or advance the timeline to inspect drivers.")
-    return reasons
+    if depth >= crit_m:
+        reasons.append(f"Critical threshold crossed ({depth:.2f} m ≥ {crit_m:.2f} m).")
+    elif depth >= warn_m:
+        reasons.append(f"Warning threshold crossed ({depth:.2f} m ≥ {warn_m:.2f} m).")
+    return reasons[:4]
 
 
 PLOTLY_LAYOUT = dict(
@@ -848,6 +940,126 @@ def build_cause_pie(city, result: SimulationResult, idx: int, t_idx: int, distri
     return fig
 
 
+
+SCENARIO_LABELS = [
+    "Normal Rainfall",
+    "Heavy Rainfall",
+    "Extreme Rainfall",
+    "Drainage Failure",
+    "Blocked Channel",
+]
+SCENARIO_TO_PRESET = {
+    "Normal Rainfall": "Normal rainfall",
+    "Heavy Rainfall": "Heavy rainfall",
+    "Extreme Rainfall": "Extreme flood",
+    "Drainage Failure": "Drainage failure",
+    "Blocked Channel": "Blocked drainage channel",
+}
+PRESET_TO_SCENARIO = {v: k for k, v in SCENARIO_TO_PRESET.items()}
+
+
+def minutes_eta(target_h: float, now_h: float) -> str:
+    if target_h != target_h:  # NaN
+        return "Not reached"
+    if now_h + 1e-9 >= target_h:
+        return "Already reached"
+    mins = max(0.0, (target_h - now_h) * 60.0)
+    if mins < 1:
+        return "< 1 min"
+    return f"~{mins:.0f} min"
+
+
+def warning_lead_minutes(ttw: float, ttc: float) -> str:
+    if ttw != ttw or ttc != ttc:
+        return "—"
+    lead = max(0.0, (ttc - ttw) * 60.0)
+    return f"{lead:.0f} min"
+
+
+def build_water_level_chart(result: SimulationResult, idx: int, t_idx: int, name: str):
+    times = [float(t) for t in result.times_h]
+    depths = [float(result.water[t, idx]) for t in range(result.n_steps)]
+    warn = float(result.config.warning_m)
+    crit = float(result.config.critical_m)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(x=times, y=depths, name="W(t)", line=dict(color="#4cc3ff", width=2.4), fill="tozeroy",
+                   fillcolor="rgba(76,195,255,0.12)")
+    )
+    fig.add_hline(y=warn, line_dash="dash", line_color="#f5a623", annotation_text="Warning", annotation_font_color="#f5a623")
+    fig.add_hline(y=crit, line_dash="dash", line_color="#e74c3c", annotation_text="Critical", annotation_font_color="#e74c3c")
+    now_h = times[min(t_idx, len(times) - 1)]
+    fig.add_vline(x=now_h, line_width=1.5, line_dash="dot", line_color="rgba(30,224,172,0.85)")
+    fig.update_layout(
+        **PLOTLY_LAYOUT,
+        height=220,
+        margin=dict(l=36, r=12, t=28, b=32),
+        title=dict(text=f"Water level · {name}", font=dict(size=12, color="#e8eef7")),
+        showlegend=False,
+    )
+    fig.update_xaxes(title_text="Hours", gridcolor="rgba(255,255,255,0.06)", zeroline=False)
+    fig.update_yaxes(title_text="m", gridcolor="rgba(255,255,255,0.06)", zeroline=False, rangemode="tozero")
+    return fig
+
+
+def build_sources_donut(city, result: SimulationResult, idx: int, t_idx: int):
+    sources = water_source_breakdown(city, result, idx, t_idx)
+    items = [
+        ("Rainfall", float(sources["Rainfall accumulation"]), "#4cc3ff"),
+        ("Upstream flow", float(sources["Net inflow from neighbours"]), "#f5a623"),
+        ("Initial stored", float(sources["Initial ponding"]), "#9b8cff"),
+    ]
+    labels, values, colors = [], [], []
+    for lab, val, col in items:
+        if val > 1e-6:
+            labels.append(lab)
+            values.append(val)
+            colors.append(col)
+    if not values:
+        labels, values, colors = ["No standing water"], [1.0], ["#3a465c"]
+    total = sum(values) or 1.0
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.58,
+                marker=dict(colors=colors, line=dict(color="#0b1220", width=2)),
+                textinfo="none",
+                hovertemplate="%{label}: %{value:.2f} m<br>%{percent}<extra></extra>",
+            )
+        ]
+    )
+    fig.update_layout(
+        **PLOTLY_LAYOUT,
+        height=200,
+        margin=dict(l=8, r=8, t=8, b=8),
+        showlegend=False,
+        annotations=[
+            dict(text="estimate", x=0.5, y=0.5, font=dict(size=11, color="#8ea0b8"), showarrow=False)
+        ],
+    )
+    legend_rows = []
+    for lab, val, col in zip(labels, values, colors):
+        pct = 100.0 * val / total
+        legend_rows.append((lab, f"{val:.2f} m · {pct:.0f}%", col))
+    return fig, legend_rows
+
+
+def movement_summary(result: SimulationResult, idx: int, t_idx: int) -> dict:
+    rows = result.district_edge_flows(t_idx, idx)
+    incoming = [r for r in rows if r["direction"] == "incoming" and r["magnitude_m3s"] > 1e-6]
+    outgoing = [r for r in rows if r["direction"] == "outgoing" and r["magnitude_m3s"] > 1e-6]
+    incoming.sort(key=lambda r: r["magnitude_m3s"], reverse=True)
+    outgoing.sort(key=lambda r: r["magnitude_m3s"], reverse=True)
+    return {
+        "in_m3s": sum(r["magnitude_m3s"] for r in incoming),
+        "out_m3s": sum(r["magnitude_m3s"] for r in outgoing),
+        "from": incoming[:3],
+        "to": outgoing[:3],
+        "edges": {(r["edge"][0], r["edge"][1]) for r in incoming},
+    }
+
 inject_css()
 init_state()
 CITY = get_city()
@@ -914,6 +1126,12 @@ CITY = get_city()
 CHANNEL_LABELS, _CHANNEL_EDGE = channel_maps(CITY)
 result = ensure_result(CITY)
 max_idx = max(0, result.n_steps - 1)
+# Apply playback advance BEFORE any widget bound to key "t_idx".
+if st.session_state.pop("playback_tick", False) and st.session_state.playing:
+    nxt = min(max_idx, int(st.session_state.t_idx) + int(st.session_state.play_speed or 1))
+    st.session_state.t_idx = nxt
+    if nxt >= max_idx:
+        st.session_state.playing = False
 st.session_state.t_idx = min(int(st.session_state.t_idx), max_idx)
 
 t_idx = int(st.session_state.t_idx)
@@ -921,88 +1139,68 @@ hours = float(result.times_h[t_idx])
 
 st.markdown('<div class="fs-main-gap"></div>', unsafe_allow_html=True)
 
-# ── Main layout (left scenarios panel is collapsible) ────────────────────
-left_collapsed = bool(st.session_state.get("left_collapsed", False))
-if left_collapsed:
-    left, center, right = st.columns((0.45, 2.9, 1.15), gap="small")
-else:
-    left, center, right = st.columns((1.05, 2.35, 1.15), gap="medium")
+# ── Main layout: compact scenarios | map + timeline | region intelligence ─
+left, center, right = st.columns((0.95, 2.55, 1.35), gap="medium")
 
 with left:
     with st.container(border=True):
-        if left_collapsed:
-            st.markdown('<div class="fs-settings-mark"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="fs-settings-caption">Setup</div>', unsafe_allow_html=True)
-            if st.button("⚙", key="expand_left", width="stretch", help="Open scenario settings"):
-                st.session_state.left_collapsed = False
-                st.rerun()
-        else:
-            head_l, head_r = st.columns((4.2, 1.0))
-            with head_l:
-                st.markdown('<div class="panel-title">SCENARIOS</div>', unsafe_allow_html=True)
-            with head_r:
-                if st.button("‹", key="collapse_left", width="stretch", help="Collapse to settings"):
-                    st.session_state.left_collapsed = True
-                    st.rerun()
-            st.caption(f"{CITY.label} · {CITY.n} districts")
-            preset = st.selectbox("Preset", list(PRESETS.keys()), key="preset_name", label_visibility="collapsed")
-            if preset != st.session_state.last_preset:
-                apply_preset_to_state(preset, CITY)
-                st.session_state.last_preset = preset
-                st.session_state.cfg_key = None
-                st.rerun()
-            st.caption(PRESETS[preset].description)
+        st.markdown('<div class="panel-title">SCENARIO</div>', unsafe_allow_html=True)
+        st.caption(f"{CITY.label}")
+        scenario = st.radio(
+            "Scenario",
+            SCENARIO_LABELS,
+            key="scenario_label",
+            label_visibility="collapsed",
+        )
+        preset = SCENARIO_TO_PRESET[scenario]
+        if preset != st.session_state.get("preset_name"):
+            apply_preset_to_state(preset, CITY)
+            st.session_state.preset_name = preset
+            st.session_state.last_preset = preset
+            st.session_state.cfg_key = None
+            st.rerun()
+        st.caption(PRESETS[preset].description)
 
+        with st.expander("Advanced controls", expanded=False):
             st.slider("Rainfall intensity", 5.0, 180.0, step=1.0, key="rainfall", format="%.0f mm/hr")
             st.slider("Rain duration", 30.0, 1440.0, step=15.0, key="rain_duration_min", format="%.0f min")
             st.slider("Drainage capacity", 0.25, 2.0, step=0.05, key="drainage_scale", format="x%.2f")
             st.slider("Initial water level", 0.0, 2.0, step=0.05, key="initial_scale", format="x%.2f")
             st.slider("Sim duration", 60.0, 2880.0, step=30.0, key="sim_duration_min", format="%.0f min")
+            st.multiselect("Drainage failure", CITY.names, key="failed_names")
+            st.selectbox("Blocked channel", CHANNEL_LABELS, key="blocked_label")
 
-            with st.expander("Failures & blockages", expanded=False):
-                st.multiselect("Drainage failure", CITY.names, key="failed_names")
-                st.selectbox("Blocked channel", CHANNEL_LABELS, key="blocked_label")
-
-            if st.button("Run simulation", type="primary", width="stretch"):
-                st.session_state.cfg_key = None
-                st.session_state.playing = False
-                st.session_state.seek_peak = True
-                st.rerun()
+        if st.button("Run simulation", type="primary", width="stretch"):
+            st.session_state.cfg_key = None
+            st.session_state.t_idx = 0
+            st.session_state.playing = True
+            st.session_state.seek_peak = False
+            st.rerun()
 
 with center:
-    m1, m2, m3 = st.columns([2.2, 1, 1])
-    with m1:
-        st.radio(
-            "Pin colour",
-            ["Risk", "Water depth", "Elevation"],
-            horizontal=True,
-            key="color_mode",
-            label_visibility="collapsed",
-        )
-    with m2:
-        st.checkbox("Grid lines", key="show_grid")
-    with m3:
-        st.checkbox("Hazard labels", key="show_labels")
-
     sel_name = st.session_state.selected_region
     sel_id = CITY.ids[CITY.names.index(sel_name)] if sel_name in CITY.names else None
+    sel_idx_pre = CITY.names.index(sel_name) if sel_name in CITY.names else 0
+    move_pre = movement_summary(result, sel_idx_pre, t_idx)
+    highlight = move_pre["edges"] if st.session_state.get("trace_active") else None
 
     fmap = build_map(
         CITY,
         result,
         t_idx=t_idx,
-        color_mode=st.session_state.color_mode,
+        color_mode="Risk",
         blocked_edges=result.blocked_edges,
-        show_grid=bool(st.session_state.show_grid),
-        show_labels=bool(st.session_state.show_labels),
+        show_grid=False,
+        show_labels=True,
         selected_id=sel_id,
+        highlight_edges=highlight,
     )
     map_state = st_folium(
         fmap,
-        height=560,
+        height=620,
         use_container_width=True,
         returned_objects=["last_object_clicked_popup", "last_object_clicked"],
-        key=f"main-map-{CITY.region_id}-{st.session_state.color_mode}-{st.session_state.cfg_key}-{st.session_state.show_grid}-{st.session_state.show_labels}-{sel_id}-{t_idx}",
+        key=f"main-map-{CITY.region_id}-{st.session_state.cfg_key}-{sel_id}-{t_idx}-{bool(highlight)}",
     )
 
     if map_state and map_state.get("last_object_clicked"):
@@ -1015,11 +1213,10 @@ with center:
             )
             st.session_state.selected_region = CITY.name_of(best)
 
-    # Timeline / playback under the map
+    # Timeline — primary time control
     st.markdown('<div class="fs-playback-mark"></div>', unsafe_allow_html=True)
     st.markdown('<div class="bottom-bar">', unsafe_allow_html=True)
-    st.markdown('<div class="fs-playback-label">Playback</div>', unsafe_allow_html=True)
-    p1, p2, p3, p4 = st.columns((1.15, 1.15, 2.4, 1.15), gap="small")
+    p1, p2, p3 = st.columns((1.1, 1.1, 3.2), gap="small")
     with p1:
         play_label = "Pause" if st.session_state.playing else "Play"
         if st.button(play_label, width="stretch", type="primary", key="play_btn"):
@@ -1033,16 +1230,6 @@ with center:
             st.session_state.t_idx = 0
             st.rerun()
     with p3:
-        speed = st.segmented_control(
-            "SPEED",
-            options=[1, 2, 4, 8],
-            format_func=lambda x: f"{x}×",
-            key="play_speed",
-            label_visibility="collapsed",
-        )
-        if speed is None:
-            st.session_state.play_speed = 1
-    with p4:
         st.markdown(
             f'<div class="t-clock">{clock_label(float(result.times_h[int(st.session_state.t_idx)]))}</div>',
             unsafe_allow_html=True,
@@ -1054,167 +1241,179 @@ with center:
         key="t_idx",
         label_visibility="collapsed",
     )
+    st.caption(f"T+0 → T+{float(result.times_h[-1]):.1f} h")
     st.markdown("</div>", unsafe_allow_html=True)
 
 with right:
     with st.container(border=True):
-        st.markdown('<div class="panel-title">SELECTED DISTRICT</div>', unsafe_allow_html=True)
-        st.markdown('<div class="fs-district-mark"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">SELECTED REGION</div>', unsafe_allow_html=True)
         st.selectbox("Region", CITY.names, key="selected_region", label_visibility="collapsed")
         sel_idx = CITY.names.index(st.session_state.selected_region)
         status = int(result.status[t_idx, sel_idx])
-        label = result.status_label(t_idx, sel_idx)
+        label = result.status_label(t_idx, sel_idx).upper()
+        if label == "WARNING":
+            label = "WARNING"
         depth = float(result.water[t_idx, sel_idx])
         color = STATUS_COLOR[status]
+        ttw = float(result.time_to_warning_h[sel_idx])
         ttc = float(result.time_to_critical_h[sel_idx])
+        warn_m = float(result.config.warning_m)
+        crit_m = float(result.config.critical_m)
         drain = CITY.drainage_mm_h[sel_idx] * result.config.drainage_scale
-        action_title, action_body, action_color = district_action(status)
+        rain_here = float(result.config.rainfall_mm_h) * float(CITY.rainfall_factor[sel_idx])
+        init_w = float(CITY.initial_water[sel_idx]) * float(result.config.initial_scale)
+        gauge = min(100.0, 100.0 * depth / max(crit_m * 1.25, 0.01))
+
         st.markdown(
             f"""
             <div class="hazard-hero" style="border-color:{color}66;box-shadow:0 0 0 1px {color}22, 0 12px 28px rgba(0,0,0,0.35);">
               <div class="district-name">{st.session_state.selected_region}</div>
               <div class="place-line">{CITY.city_name}, {CITY.state_name}</div>
+              <div style="font-size:0.7rem;letter-spacing:0.12em;color:var(--muted);margin-top:0.45rem;">FLOOD RISK</div>
               <div class="hazard-status" style="color:{color};">{label}</div>
-              <div class="hazard-depth">{depth:.2f}<span>m water</span></div>
-              <div class="hazard-meta">
-                <div class="cell"><div class="k">ETA to critical</div><div class="v" style="color:{color};">{eta_text(ttc)}</div></div>
-                <div class="cell"><div class="k">Population</div><div class="v">{CITY.population[sel_idx]:,}</div></div>
-                <div class="cell"><div class="k">Elevation</div><div class="v">{CITY.elevation[sel_idx]:.0f} m</div></div>
-                <div class="cell"><div class="k">Drainage</div><div class="v">{drain:.0f} mm/h</div></div>
-              </div>
-              <div class="action-callout" style="border-color:{action_color}66;background:{action_color}18;">
-                <div class="action-kicker" style="color:{action_color};">{action_title}</div>
-                <div class="action-body">{action_body}</div>
-              </div>
+              <div style="font-size:0.7rem;letter-spacing:0.12em;color:var(--muted);margin-top:0.55rem;">CURRENT WATER LEVEL</div>
+              <div class="hazard-depth">{depth:.2f}<span>m</span></div>
+              <div class="water-gauge"><span style="width:{gauge:.1f}%;background:{color};"></span></div>
+              <div class="ew-row"><span class="k">Warning</span><span class="v">{warn_m:.2f} m</span></div>
+              <div class="ew-row"><span class="k">Critical</span><span class="v">{crit_m:.2f} m</span></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    with st.container(border=True):
-        st.markdown('<div class="panel-title-sm">Why this hazard</div>', unsafe_allow_html=True)
-        reasons = flooding_reasons(CITY, result, sel_idx, t_idx)
+        st.markdown('<div class="panel-title-sm">Early warning</div>', unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="ew-row"><span class="k">Time to warning</span><span class="v">{minutes_eta(ttw, hours)}</span></div>
+            <div class="ew-row"><span class="k">Time to critical</span><span class="v">{minutes_eta(ttc, hours)}</span></div>
+            <div class="ew-row"><span class="k">Warning lead time</span><span class="v">{warning_lead_minutes(ttw, ttc)}</span></div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown('<div class="panel-title-sm">Current conditions</div>', unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="info-grid">
+              <div class="info-card"><div class="k">Rainfall</div><div class="v">{rain_here:.0f} mm/h</div></div>
+              <div class="info-card"><div class="k">Elevation</div><div class="v">{CITY.elevation[sel_idx]:.1f} m</div></div>
+              <div class="info-card"><div class="k">Drainage</div><div class="v">{drain:.0f} mm/h</div></div>
+              <div class="info-card"><div class="k">Initial water</div><div class="v">{init_w:.2f} m</div></div>
+              <div class="info-card"><div class="k">Population</div><div class="v">{CITY.population[sel_idx]:,}</div></div>
+              <div class="info-card"><div class="k">Timeline</div><div class="v">{clock_label(hours)}</div></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown('<div class="panel-title-sm">Why is this flooding?</div>', unsafe_allow_html=True)
+        reasons = flooding_reasons(CITY, result, sel_idx, t_idx)[:4]
         for reason in reasons:
             st.markdown(f'<div class="why-item">• {reason}</div>', unsafe_allow_html=True)
 
-    with st.expander("Water source breakdown", expanded=False):
-        sources = water_source_breakdown(CITY, result, sel_idx, t_idx)
-        for name, value in sources.items():
+        t1, t2 = st.columns(2, gap="small")
+        with t1:
+            trace_label = "Trace · ON" if st.session_state.trace_active else "Trace Water Source"
+            if st.button(trace_label, width="stretch", key="trace_btn"):
+                st.session_state.trace_active = not st.session_state.trace_active
+                st.rerun()
+        with t2:
+            with st.popover("What-if Analysis"):
+                counts = result.counts_at(t_idx)
+                st.write(
+                    f"At {clock_label(hours)}: **{counts['Critical']}** critical · "
+                    f"**{counts['Warning']}** warning · affected **{result.affected_population(t_idx):,}**."
+                )
+                cmp_names = [n for n in PRESETS if n != "Custom"]
+                a = st.selectbox("Compare to preset", cmp_names, key="whatif_preset")
+                other = run_simulation(CITY, apply_preset(a, CITY))
+                oi = min(t_idx, other.n_steps - 1)
+                first = other.first_critical_hour()
+                st.caption(
+                    f"{a}: {other.counts_at(oi)['Critical']} critical · "
+                    f"affected {other.affected_population(oi):,} · "
+                    f"first critical {first if first is not None else '—'} h"
+                )
+
+# ── Region hydrology (below map + sidebars) ───────────────────────────────
+sel_idx = CITY.names.index(st.session_state.selected_region)
+st.markdown('<div class="fs-main-gap"></div>', unsafe_allow_html=True)
+with st.container(border=True):
+    st.markdown(
+        f'<div class="panel-title">REGION HYDROLOGY · {st.session_state.selected_region}</div>',
+        unsafe_allow_html=True,
+    )
+    chart_l, chart_r = st.columns(2, gap="medium")
+    with chart_l:
+        st.markdown('<div class="panel-title-sm">Water level over time</div>', unsafe_allow_html=True)
+        st.plotly_chart(
+            build_water_level_chart(result, sel_idx, t_idx, st.session_state.selected_region),
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
+    with chart_r:
+        st.markdown('<div class="panel-title-sm">Water sources</div>', unsafe_allow_html=True)
+        st.caption("Model-derived contribution estimate at this hour")
+        donut, legend_rows = build_sources_donut(CITY, result, sel_idx, t_idx)
+        st.plotly_chart(donut, use_container_width=True, config={"displayModeBar": False})
+        for lab, meta, col in legend_rows:
             st.markdown(
-                f'<div class="src-row"><span>{name}</span><span>{value:.2f} m</span></div>',
+                f'<div class="src-legend-row"><span><span class="src-dot" style="background:{col}"></span>{lab}</span><span>{meta}</span></div>',
                 unsafe_allow_html=True,
             )
 
-    with st.expander("What-if analysis", expanded=False):
-        counts = result.counts_at(t_idx)
-        st.write(
-            f"At {clock_label(hours)}: **{counts['Critical']}** critical · "
-            f"**{counts['Warning']}** warning · affected **{result.affected_population(t_idx):,}** people."
-        )
-        cmp_names = [n for n in PRESETS if n != "Custom"]
-        a = st.selectbox("Compare to preset", cmp_names, key="whatif_preset")
-        other = run_simulation(CITY, apply_preset(a, CITY))
-        oi = min(t_idx, other.n_steps - 1)
-        first = other.first_critical_hour()
-        st.caption(
-            f"{a}: {other.counts_at(oi)['Critical']} critical · "
-            f"affected {other.affected_population(oi):,} · "
-            f"first critical {first if first is not None else '—'} h"
-        )
-
-
-# ── Early warning / evacuation system ────────────────────────────────────
-danger_rows, evacuate_rows = alert_groups(CITY, result, t_idx)
-danger_pop = sum(r["population"] for r in danger_rows)
-evacuate_pop = sum(r["population"] for r in evacuate_rows)
-st.markdown('<div class="fs-main-gap"></div>', unsafe_allow_html=True)
-with st.container(border=True):
-    st.markdown('<div class="panel-title">EARLY WARNING SYSTEM</div>', unsafe_allow_html=True)
-    st.caption(
-        f"{CITY.label} · {clock_label(hours)} · "
-        f"warning ≥ {result.config.warning_m:.2f} m · evacuate ≥ {result.config.critical_m:.2f} m"
-    )
+    move = movement_summary(result, sel_idx, t_idx)
+    st.markdown('<div class="panel-title-sm">Water movement</div>', unsafe_allow_html=True)
     st.markdown(
         f"""
-        <div class="alert-summary">
-          <div class="alert-card warn">
-            <div class="alert-kicker">In danger · prepare</div>
-            <div class="alert-count">{len(danger_rows)}<span>districts</span></div>
-            <div class="alert-pop">{danger_pop:,} people under alert</div>
-            <div class="alert-msg">Warning depth reached — ready go-bags, move to upper floors, watch for escalation.</div>
-          </div>
-          <div class="alert-card evac">
-            <div class="alert-kicker">Evacuate now</div>
-            <div class="alert-count">{len(evacuate_rows)}<span>districts</span></div>
-            <div class="alert-pop">{evacuate_pop:,} people to evacuate</div>
-            <div class="alert-msg">Critical flooding — leave the flood zone immediately and seek higher ground.</div>
-          </div>
+        <div class="info-grid">
+          <div class="info-card"><div class="k">Incoming</div><div class="v">{move['in_m3s']:.1f} m³/s</div></div>
+          <div class="info-card"><div class="k">Outgoing</div><div class="v">{move['out_m3s']:.1f} m³/s</div></div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    list_l, list_r = st.columns(2, gap="medium")
-    with list_l:
-        st.markdown("**Districts in danger**")
-        render_alert_district_buttons(danger_rows, "danger")
-    with list_r:
-        st.markdown("**Districts to evacuate**")
-        render_alert_district_buttons(evacuate_rows, "evacuate")
-
-# ── Analytics below map + timeline ───────────────────────────────────────
-sel_idx = CITY.names.index(st.session_state.selected_region)
-st.markdown('<div class="fs-main-gap"></div>', unsafe_allow_html=True)
-with st.container(border=True):
-    st.markdown('<div class="panel-title">FLOOD PROGRESSION & CAUSES</div>', unsafe_allow_html=True)
-    st.caption(
-        f"{CITY.label} · timeline {clock_label(hours)} · selected {st.session_state.selected_region}"
-    )
-    st.plotly_chart(
-        build_progression_figure(result, t_idx, sel_idx, st.session_state.selected_region),
-        use_container_width=True,
-        config={"displayModeBar": False},
-    )
-    pie_l, pie_r = st.columns(2, gap="medium")
-    with pie_l:
-        st.plotly_chart(
-            build_status_pie(result, t_idx),
-            use_container_width=True,
-            config={"displayModeBar": False},
-        )
-    with pie_r:
-        st.plotly_chart(
-            build_cause_pie(CITY, result, sel_idx, t_idx, st.session_state.selected_region),
-            use_container_width=True,
-            config={"displayModeBar": False},
-        )
+    move_cols = st.columns(2, gap="medium")
+    with move_cols[0]:
+        for r in move["from"]:
+            st.markdown(
+                f'<div class="move-chip">From: {r["neighbor_name"]} · {r["magnitude_m3s"]:.1f} m³/s</div>',
+                unsafe_allow_html=True,
+            )
+        if not move["from"]:
+            st.caption("No incoming neighbour flow at this hour.")
+    with move_cols[1]:
+        for r in move["to"]:
+            st.markdown(
+                f'<div class="move-chip">To: {r["neighbor_name"]} · {r["magnitude_m3s"]:.1f} m³/s</div>',
+                unsafe_allow_html=True,
+            )
+        if not move["to"]:
+            st.caption("No outgoing neighbour flow at this hour.")
 
 with st.expander("Model equations", expanded=False):
     st.markdown(
         r"""
         At each step Δt:
 
-        1. **Rain** · \(w \leftarrow w + R\cdot c\cdot f\cdot \Delta t\) while raining  
-        2. **Drain** · \(w \leftarrow \max(0,\, w - D\cdot s\cdot \Delta t - I\cdot \Delta t)\)  
-        3. **Flow** · \(H = z + w\), flux \(k(H_i-H_j)\Delta t\) along edges  
-        4. **Sea / river sink** on coastal / riverfront districts  
-        5. **Class** · Safe < 0.22 m · Warning · Critical ≥ 0.60 m
+        1. **Rain** · \(w \leftarrow w + R\cdot c\cdot f\cdot \Delta t\) while raining
+        2. **Drain** · \(w \leftarrow \max(0,\, w - D\cdot s\cdot \Delta t - I\cdot \Delta t)\)
+        3. **Flow** · \(H = z + w\), flux \(k\sqrt{|H|}\) (signed) along edges
+        4. **Sea / river sink** on coastal / riverfront districts
+        5. **Class** · Safe / Warning / Critical from depth thresholds
         """
     )
 
 
-@st.fragment(run_every=timedelta(milliseconds=700) if st.session_state.playing else None)
+
+@st.fragment(run_every=timedelta(milliseconds=1100) if st.session_state.playing else None)
 def _advance_playback() -> None:
     if not st.session_state.playing:
         return
-    res = st.session_state.get("result")
-    if res is None:
-        return
-    cap = res.n_steps - 1
-    nxt = min(cap, int(st.session_state.t_idx) + int(st.session_state.play_speed or 1))
-    st.session_state.t_idx = nxt
-    if nxt >= cap:
-        st.session_state.playing = False
+    # Defer t_idx mutation to the next full run (before the timeline slider mounts).
+    st.session_state.playback_tick = True
     st.rerun()
 
 
-_advance_playback()
+if st.session_state.playing:
+    _advance_playback()
