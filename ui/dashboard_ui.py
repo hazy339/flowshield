@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 from streamlit_folium import st_folium
 
 from simulation.city import list_regions, load_city, resolve_region_query
-from simulation.model import SimConfig, SimulationResult, run_simulation
+from simulation.model import CRITICAL, SimConfig, SimulationResult, WARNING, run_simulation
 from simulation.scenarios import PRESETS, apply_preset
 from simulation.viz import build_map
 
@@ -56,39 +58,45 @@ def inject_css() -> None:
         [data-testid="stToolbar"] { display: none; }
         [data-testid="stSidebar"] { display: none; }
         .block-container {
-            padding: 0.55rem 1.1rem 0.4rem !important;
+            padding: 1.05rem 1.45rem 0.85rem !important;
             max-width: 100% !important;
         }
         div[data-testid="stVerticalBlockBorderWrapper"] {
             background: var(--panel);
             border: 1px solid var(--line) !important;
             border-radius: 14px;
-            padding: 0.15rem 0.35rem 0.45rem;
+            padding: 0.35rem 0.55rem 0.55rem;
         }
         .fs-top {
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 1rem;
-            margin-bottom: 0.55rem;
-            padding: 0.15rem 0.2rem;
+            flex-direction: column;
+            justify-content: center;
+            gap: 0.2rem;
+            margin: 0;
+            padding: 1.05rem 0.1rem 0.1rem;
+            min-height: 4.4rem;
+        }
+        .fs-main-gap {
+            height: 1.45rem;
         }
         .fs-brand {
             display: flex;
-            align-items: baseline;
-            gap: 0.75rem;
-            flex-wrap: wrap;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.28rem;
         }
         .fs-logo {
-            font-size: 1.35rem;
+            font-size: 1.72rem;
             font-weight: 800;
             letter-spacing: 0.08em;
             color: var(--text);
+            line-height: 1.1;
         }
         .fs-logo span { color: var(--accent); }
         .fs-sub {
             color: var(--muted);
-            font-size: 0.82rem;
+            font-size: 0.84rem;
+            line-height: 1.3;
         }
         .panel-title {
             font-size: 0.78rem;
@@ -205,6 +213,85 @@ def inject_css() -> None:
             margin: 0.25rem 0;
             padding-left: 0.2rem;
         }
+        .action-callout {
+            margin-top: 0.75rem;
+            padding: 0.55rem 0.65rem;
+            border-radius: 10px;
+            border: 1px solid;
+        }
+        .action-callout .action-kicker {
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-bottom: 0.2rem;
+        }
+        .action-callout .action-body {
+            font-size: 0.84rem;
+            color: #e8eef7;
+            line-height: 1.35;
+        }
+        .alert-summary {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.65rem;
+            margin: 0.35rem 0 0.75rem;
+        }
+        .alert-card {
+            border-radius: 12px;
+            border: 1px solid;
+            padding: 0.7rem 0.8rem;
+            background: rgba(11,18,32,0.72);
+        }
+        .alert-card.warn {
+            border-color: rgba(245,166,35,0.55);
+            box-shadow: inset 3px 0 0 #f5a623;
+        }
+        .alert-card.evac {
+            border-color: rgba(231,76,60,0.65);
+            box-shadow: inset 3px 0 0 #e74c3c;
+            animation: fs-alert-pulse 1.8s ease-in-out infinite;
+        }
+        .alert-card .alert-kicker {
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+        }
+        .alert-card.warn .alert-kicker { color: #f5a623; }
+        .alert-card.evac .alert-kicker { color: #e74c3c; }
+        .alert-card .alert-count {
+            font-size: 1.55rem;
+            font-weight: 800;
+            color: var(--text);
+            line-height: 1.15;
+            margin: 0.2rem 0 0.15rem;
+        }
+        .alert-card .alert-count span {
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--muted);
+            margin-left: 0.25rem;
+        }
+        .alert-card .alert-pop {
+            font-size: 0.8rem;
+            color: #c5d4e8;
+        }
+        .alert-card .alert-msg {
+            font-size: 0.78rem;
+            color: var(--muted);
+            margin-top: 0.35rem;
+            line-height: 1.35;
+        }
+        .alert-empty {
+            color: var(--muted);
+            font-size: 0.82rem;
+            padding: 0.35rem 0.1rem 0.15rem;
+        }
+        @keyframes fs-alert-pulse {
+            0%, 100% { box-shadow: inset 3px 0 0 #e74c3c, 0 0 0 0 rgba(231,76,60,0); }
+            50% { box-shadow: inset 3px 0 0 #e74c3c, 0 0 0 4px rgba(231,76,60,0.12); }
+        }
         .map-shell {
             border: 1px solid var(--line);
             border-radius: 14px;
@@ -218,22 +305,140 @@ def inject_css() -> None:
         }
         .bottom-bar {
             margin-top: 0.55rem;
+            margin-bottom: 0.15rem;
             border: 1px solid var(--line);
             border-radius: 14px;
             background: var(--panel);
-            padding: 0.55rem 0.8rem 0.35rem;
+            padding: 0.65rem 0.85rem 0.55rem;
         }
         .t-clock {
             color: var(--accent);
             font-weight: 700;
             font-variant-numeric: tabular-nums;
-            font-size: 0.95rem;
+            font-size: 1.05rem;
             text-align: right;
             padding-top: 0.55rem;
+            letter-spacing: 0.02em;
+        }
+        .fs-playback-label {
+            color: var(--muted);
+            font-size: 0.68rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 650;
+            margin: 0 0 0.35rem;
+        }
+        div[data-testid="stVerticalBlock"]:has(.fs-playback-mark) button {
+            min-height: 2.65rem !important;
+            border-radius: 10px !important;
+            font-weight: 700 !important;
+            font-size: 0.92rem !important;
+            letter-spacing: 0.02em;
+            padding: 0.35rem 0.7rem !important;
+        }
+        div[data-testid="stVerticalBlock"]:has(.fs-playback-mark) div[data-testid="stSlider"] {
+            padding-top: 0.15rem;
         }
         div[data-testid="stSlider"] label { color: var(--muted) !important; }
         button[kind="secondary"] {
             border: 1px solid var(--line) !important;
+        }
+        /* Collapsed scenarios → settings rail (scoped to settings panel only) */
+        div[data-testid="stHorizontalBlock"] > div:has(.fs-settings-mark),
+        div[data-testid="column"]:has(.fs-settings-mark),
+        [data-testid="stColumn"]:has(.fs-settings-mark) {
+            flex: 0 0 4.85rem !important;
+            min-width: 4.85rem !important;
+            max-width: 5.1rem !important;
+            width: 4.85rem !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-settings-mark) {
+            padding: 0.5rem 0.3rem !important;
+            min-width: 3.6rem !important;
+            width: 100%;
+            box-sizing: border-box;
+            background: linear-gradient(180deg, rgba(21,29,46,0.98), rgba(11,18,32,0.95));
+            border-color: rgba(30,224,172,0.28) !important;
+            box-shadow: 0 8px 22px rgba(0,0,0,0.28);
+            overflow: visible !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-settings-mark) button {
+            background: rgba(30, 224, 172, 0.1) !important;
+            border: 1px solid rgba(30, 224, 172, 0.45) !important;
+            border-radius: 14px !important;
+            color: #1ee0ac !important;
+            font-size: 1.35rem !important;
+            line-height: 1 !important;
+            width: 2.85rem !important;
+            min-width: 2.85rem !important;
+            max-width: 2.85rem !important;
+            height: 2.85rem !important;
+            min-height: 2.85rem !important;
+            padding: 0 !important;
+            margin: 0 auto !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0 0 0 1px rgba(30,224,172,0.08), 0 6px 18px rgba(30,224,172,0.12) !important;
+            transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-settings-mark) button:hover {
+            background: rgba(30, 224, 172, 0.2) !important;
+            box-shadow: 0 0 0 1px rgba(30,224,172,0.2), 0 8px 22px rgba(30,224,172,0.22) !important;
+            transform: translateY(-1px);
+        }
+        .fs-settings-caption {
+            display: none;
+        }
+        /* Top search cluster — scoped to search panel only */
+        .fs-search-chrome {
+            display: none;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-search-mark) {
+            background: rgba(11, 18, 32, 0.55);
+            border: 1px solid rgba(30, 224, 172, 0.22) !important;
+            border-radius: 16px;
+            padding: 0.65rem 0.8rem !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 10px 28px rgba(0,0,0,0.22);
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-search-mark) [data-testid="stTextInput"] input {
+            background: rgba(8, 14, 24, 0.92) !important;
+            border: 1px solid rgba(30, 224, 172, 0.38) !important;
+            border-radius: 10px !important;
+            color: var(--text) !important;
+            min-height: 2.7rem !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-search-mark) [data-testid="stTextInput"] input:focus {
+            border-color: rgba(30, 224, 172, 0.6) !important;
+            box-shadow: 0 0 0 2px rgba(30, 224, 172, 0.15) !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-search-mark) [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-district-mark) [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            background-color: rgba(8, 14, 24, 0.95) !important;
+            border-color: rgba(30, 224, 172, 0.42) !important;
+            border-radius: 10px !important;
+            color: var(--text) !important;
+            min-height: 2.7rem !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-search-mark) [data-testid="stSelectbox"] svg,
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-district-mark) [data-testid="stSelectbox"] svg {
+            fill: #1ee0ac !important;
+            opacity: 1 !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-search-mark) button[kind="primary"] {
+            border-radius: 10px !important;
+            min-height: 2.7rem !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.04em !important;
+            text-transform: uppercase;
+            font-size: 0.86rem !important;
+            background: linear-gradient(180deg, #24ecc0, #16c49a) !important;
+            color: #062018 !important;
+            border: 0 !important;
+            box-shadow: 0 6px 16px rgba(30, 224, 172, 0.25) !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.fs-search-mark) button[kind="primary"]:hover {
+            filter: brightness(1.05);
         }
         </style>
         """,
@@ -256,6 +461,61 @@ def clock_label(hours: float) -> str:
     total_m = int(round(hours * 60))
     h, m = divmod(total_m, 60)
     return f"T+{h}h {m:02d}m"
+
+
+def district_action(status: int) -> tuple[str, str, str]:
+    if status >= CRITICAL:
+        return (
+            "EVACUATE NOW",
+            "Critical flooding. Leave the flood zone immediately and move to higher ground.",
+            "#e74c3c",
+        )
+    if status >= WARNING:
+        return (
+            "DANGER ALERT",
+            "District in danger. Prepare to evacuate, move valuables upstairs, and monitor the timeline.",
+            "#f5a623",
+        )
+    return (
+        "MONITORING",
+        "Depth is below the warning threshold. Continue watching the playback for rising water.",
+        "#1ee0ac",
+    )
+
+
+def alert_groups(city, result: SimulationResult, t_idx: int) -> tuple[list[dict], list[dict]]:
+    danger: list[dict] = []
+    evacuate: list[dict] = []
+    for idx, name in enumerate(city.names):
+        status = int(result.status[t_idx, idx])
+        if status < WARNING:
+            continue
+        row = {
+            "name": name,
+            "depth": float(result.water[t_idx, idx]),
+            "population": int(city.population[idx]),
+            "eta": float(result.time_to_critical_h[idx]),
+        }
+        if status >= CRITICAL:
+            evacuate.append(row)
+        else:
+            danger.append(row)
+    danger.sort(key=lambda r: r["depth"], reverse=True)
+    evacuate.sort(key=lambda r: r["depth"], reverse=True)
+    return danger, evacuate
+
+
+def render_alert_district_buttons(rows: list[dict], prefix: str) -> None:
+    if not rows:
+        st.markdown('<div class="alert-empty">None at this hour.</div>', unsafe_allow_html=True)
+        return
+    cols = st.columns(3)
+    for i, row in enumerate(rows):
+        label = f"{row['name']} · {row['depth']:.2f} m"
+        with cols[i % 3]:
+            if st.button(label, key=f"{prefix}_{row['name']}", width="stretch"):
+                st.session_state.selected_region = row["name"]
+                st.rerun()
 
 
 def edge_label(blocked_label: str, channel_edge: dict) -> tuple[tuple[str, str], ...]:
@@ -322,6 +582,7 @@ def init_state() -> None:
         "show_labels": True,
         "study_area_label": "Chennai, Tamil Nadu",
         "seek_peak": True,
+        "left_collapsed": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -429,6 +690,164 @@ def flooding_reasons(city, result: SimulationResult, idx: int, t_idx: int) -> li
     return reasons
 
 
+PLOTLY_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(11,18,32,0.35)",
+    font=dict(color="#c5d4e8", size=12),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+)
+
+
+def build_progression_figure(result: SimulationResult, t_idx: int, selected_idx: int, district_name: str):
+    times = [float(t) for t in result.times_h]
+    safe, warn, crit, mean_depth, sel_depth = [], [], [], [], []
+    for t in range(result.n_steps):
+        counts = result.counts_at(t)
+        safe.append(counts["Safe"])
+        warn.append(counts["Warning"])
+        crit.append(counts["Critical"])
+        mean_depth.append(float(result.water[t].mean()))
+        sel_depth.append(float(result.water[t, selected_idx]))
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(x=times, y=safe, name="Safe districts", line=dict(color="#1ee0ac", width=2)),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(x=times, y=warn, name="Warning", line=dict(color="#f5a623", width=2)),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(x=times, y=crit, name="Critical", line=dict(color="#e74c3c", width=2.5)),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=times,
+            y=mean_depth,
+            name="Basin mean depth",
+            line=dict(color="#7ec8ff", width=2, dash="dot"),
+        ),
+        secondary_y=True,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=times,
+            y=sel_depth,
+            name=f"{district_name} depth",
+            line=dict(color="#ffffff", width=2),
+        ),
+        secondary_y=True,
+    )
+    now_h = times[min(t_idx, len(times) - 1)]
+    fig.add_vline(x=now_h, line_width=2, line_dash="dash", line_color="rgba(30,224,172,0.85)")
+    fig.add_annotation(
+        x=now_h,
+        y=1.02,
+        yref="paper",
+        text="Now",
+        showarrow=False,
+        font=dict(color="#1ee0ac", size=11),
+    )
+    fig.update_layout(
+        **PLOTLY_LAYOUT,
+        title=dict(
+            text="Flood progression over time",
+            font=dict(size=14, color="#e8eef7"),
+            pad=dict(b=14),
+        ),
+        height=340,
+        hovermode="x unified",
+        margin=dict(l=40, r=24, t=58, b=40),
+    )
+    fig.update_xaxes(title_text="Hours", gridcolor="rgba(255,255,255,0.06)", zeroline=False)
+    fig.update_yaxes(
+        title_text="Districts",
+        secondary_y=False,
+        gridcolor="rgba(255,255,255,0.06)",
+        zeroline=False,
+        rangemode="tozero",
+    )
+    fig.update_yaxes(
+        title_text="Water depth (m)",
+        secondary_y=True,
+        gridcolor="rgba(255,255,255,0.03)",
+        zeroline=False,
+        rangemode="tozero",
+    )
+    return fig
+
+
+def build_status_pie(result: SimulationResult, t_idx: int):
+    counts = result.counts_at(t_idx)
+    labels = ["Safe", "Warning", "Critical"]
+    values = [counts["Safe"], counts["Warning"], counts["Critical"]]
+    colors = ["#1ee0ac", "#f5a623", "#e74c3c"]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.45,
+                marker=dict(colors=colors, line=dict(color="#0b1220", width=2)),
+                textinfo="label+percent",
+                hovertemplate="%{label}: %{value} districts<br>%{percent}<extra></extra>",
+            )
+        ]
+    )
+    fig.update_layout(
+        **PLOTLY_LAYOUT,
+        title=dict(text="Basin hazard mix (now)", font=dict(size=14, color="#e8eef7")),
+        height=320,
+        showlegend=False,
+        margin=dict(l=20, r=20, t=48, b=20),
+    )
+    return fig
+
+
+def build_cause_pie(city, result: SimulationResult, idx: int, t_idx: int, district_name: str):
+    sources = water_source_breakdown(city, result, idx, t_idx)
+    cause_keys = [
+        ("Rainfall accumulation", "#4cc3ff"),
+        ("Initial ponding", "#9b8cff"),
+        ("Net inflow from neighbours", "#f5a623"),
+    ]
+    labels = []
+    values = []
+    colors = []
+    for key, color in cause_keys:
+        val = float(sources.get(key, 0.0))
+        if val > 1e-6:
+            labels.append(key.replace(" accumulation", "").replace(" from neighbours", ""))
+            values.append(val)
+            colors.append(color)
+    if not values:
+        labels = ["No standing flood yet"]
+        values = [1.0]
+        colors = ["#3a465c"]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.45,
+                marker=dict(colors=colors, line=dict(color="#0b1220", width=2)),
+                textinfo="label+percent",
+                hovertemplate="%{label}: %{value:.2f} m<br>%{percent}<extra></extra>",
+            )
+        ]
+    )
+    fig.update_layout(
+        **PLOTLY_LAYOUT,
+        title=dict(text=f"Flood causes · {district_name}", font=dict(size=14, color="#e8eef7")),
+        height=320,
+        showlegend=False,
+        margin=dict(l=20, r=20, t=48, b=20),
+    )
+    return fig
+
+
 inject_css()
 init_state()
 CITY = get_city()
@@ -440,7 +859,7 @@ if st.session_state.blocked_label not in CHANNEL_LABELS:
 st.session_state.failed_names = [n for n in st.session_state.failed_names if n in CITY.names]
 
 # ── Top bar ──────────────────────────────────────────────────────────────
-top_l, top_r = st.columns((2.4, 1.6))
+top_l, top_r = st.columns((1.15, 1.85), gap="medium")
 with top_l:
     st.markdown(
         f"""
@@ -454,34 +873,36 @@ with top_l:
         unsafe_allow_html=True,
     )
 with top_r:
-    s1, s2, s3 = st.columns((1.5, 1.5, 1.0))
-    with s1:
-        st.text_input(
-            "Search",
-            placeholder="Delhi, Mumbai, Chennai, Kolkata…",
-            label_visibility="collapsed",
-            key="search_query",
-        )
-    with s2:
-        study = st.selectbox(
-            "Study area",
-            REGION_LABELS,
-            label_visibility="collapsed",
-            key="study_area_label",
-        )
-    with s3:
-        if st.button("Go", width="stretch", type="primary"):
-            rid = resolve_region_query(st.session_state.search_query)
-            if not rid:
-                rid = LABEL_TO_REGION.get(st.session_state.study_area_label)
-            if rid and rid != st.session_state.region_id:
-                switch_region(rid)
-                st.session_state.study_area_label = load_city(rid).label
-                st.rerun()
-            else:
-                st.session_state.t_idx = 0
-                st.session_state.playing = False
-                st.session_state.cfg_key = None
+    with st.container(border=True):
+        st.markdown('<div class="fs-search-mark"></div>', unsafe_allow_html=True)
+        s1, s2, s3 = st.columns((2.2, 2.4, 1.5), gap="small")
+        with s1:
+            st.text_input(
+                "Search",
+                placeholder="City or state — Delhi, Kochi, Assam…",
+                label_visibility="collapsed",
+                key="search_query",
+            )
+        with s2:
+            study = st.selectbox(
+                "Study area",
+                REGION_LABELS,
+                label_visibility="collapsed",
+                key="study_area_label",
+            )
+        with s3:
+            if st.button("Search", width="stretch", type="primary"):
+                rid = resolve_region_query(st.session_state.search_query)
+                if not rid:
+                    rid = LABEL_TO_REGION.get(st.session_state.study_area_label)
+                if rid and rid != st.session_state.region_id:
+                    switch_region(rid)
+                    st.session_state.study_area_label = load_city(rid).label
+                    st.rerun()
+                else:
+                    st.session_state.t_idx = 0
+                    st.session_state.playing = False
+                    st.session_state.cfg_key = None
 
 # Apply study-area dropdown changes immediately
 _selected_rid = LABEL_TO_REGION.get(st.session_state.study_area_label)
@@ -498,49 +919,55 @@ st.session_state.t_idx = min(int(st.session_state.t_idx), max_idx)
 t_idx = int(st.session_state.t_idx)
 hours = float(result.times_h[t_idx])
 
-# ── Main 3-column layout ─────────────────────────────────────────────────
-left, center, right = st.columns((1.05, 2.35, 1.15), gap="small")
+st.markdown('<div class="fs-main-gap"></div>', unsafe_allow_html=True)
+
+# ── Main layout (left scenarios panel is collapsible) ────────────────────
+left_collapsed = bool(st.session_state.get("left_collapsed", False))
+if left_collapsed:
+    left, center, right = st.columns((0.45, 2.9, 1.15), gap="small")
+else:
+    left, center, right = st.columns((1.05, 2.35, 1.15), gap="medium")
 
 with left:
     with st.container(border=True):
-        st.markdown('<div class="panel-title">SCENARIOS</div>', unsafe_allow_html=True)
-        st.caption(f"{CITY.label} · {CITY.n} districts")
-        preset = st.selectbox("Preset", list(PRESETS.keys()), key="preset_name", label_visibility="collapsed")
-        if preset != st.session_state.last_preset:
-            apply_preset_to_state(preset, CITY)
-            st.session_state.last_preset = preset
-            st.session_state.cfg_key = None
-            st.rerun()
-        st.caption(PRESETS[preset].description)
+        if left_collapsed:
+            st.markdown('<div class="fs-settings-mark"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="fs-settings-caption">Setup</div>', unsafe_allow_html=True)
+            if st.button("⚙", key="expand_left", width="stretch", help="Open scenario settings"):
+                st.session_state.left_collapsed = False
+                st.rerun()
+        else:
+            head_l, head_r = st.columns((4.2, 1.0))
+            with head_l:
+                st.markdown('<div class="panel-title">SCENARIOS</div>', unsafe_allow_html=True)
+            with head_r:
+                if st.button("‹", key="collapse_left", width="stretch", help="Collapse to settings"):
+                    st.session_state.left_collapsed = True
+                    st.rerun()
+            st.caption(f"{CITY.label} · {CITY.n} districts")
+            preset = st.selectbox("Preset", list(PRESETS.keys()), key="preset_name", label_visibility="collapsed")
+            if preset != st.session_state.last_preset:
+                apply_preset_to_state(preset, CITY)
+                st.session_state.last_preset = preset
+                st.session_state.cfg_key = None
+                st.rerun()
+            st.caption(PRESETS[preset].description)
 
-        st.slider("Rainfall intensity", 5.0, 180.0, step=1.0, key="rainfall", format="%.0f mm/hr")
-        st.slider("Rain duration", 30.0, 1440.0, step=15.0, key="rain_duration_min", format="%.0f min")
-        st.slider("Drainage capacity", 0.25, 2.0, step=0.05, key="drainage_scale", format="x%.2f")
-        st.slider("Initial water level", 0.0, 2.0, step=0.05, key="initial_scale", format="x%.2f")
-        st.slider("Sim duration", 60.0, 2880.0, step=30.0, key="sim_duration_min", format="%.0f min")
+            st.slider("Rainfall intensity", 5.0, 180.0, step=1.0, key="rainfall", format="%.0f mm/hr")
+            st.slider("Rain duration", 30.0, 1440.0, step=15.0, key="rain_duration_min", format="%.0f min")
+            st.slider("Drainage capacity", 0.25, 2.0, step=0.05, key="drainage_scale", format="x%.2f")
+            st.slider("Initial water level", 0.0, 2.0, step=0.05, key="initial_scale", format="x%.2f")
+            st.slider("Sim duration", 60.0, 2880.0, step=30.0, key="sim_duration_min", format="%.0f min")
 
-        with st.expander("Failures & blockages", expanded=False):
-            st.multiselect("Drainage failure", CITY.names, key="failed_names")
-            st.selectbox("Blocked channel", CHANNEL_LABELS, key="blocked_label")
+            with st.expander("Failures & blockages", expanded=False):
+                st.multiselect("Drainage failure", CITY.names, key="failed_names")
+                st.selectbox("Blocked channel", CHANNEL_LABELS, key="blocked_label")
 
-        if st.button("Run simulation", type="primary", width="stretch"):
-            st.session_state.cfg_key = None
-            st.session_state.playing = False
-            st.session_state.seek_peak = True
-            st.rerun()
-
-        with st.expander("Model equations", expanded=False):
-            st.markdown(
-                r"""
-                At each step Δt:
-
-                1. **Rain** · \(w \leftarrow w + R\cdot c\cdot f\cdot \Delta t\) while raining  
-                2. **Drain** · \(w \leftarrow \max(0,\, w - D\cdot s\cdot \Delta t - I\cdot \Delta t)\)  
-                3. **Flow** · \(H = z + w\), flux \(k(H_i-H_j)\Delta t\) along edges  
-                4. **Sea / river sink** on coastal / riverfront districts  
-                5. **Class** · Safe < 0.22 m · Warning · Critical ≥ 0.60 m
-                """
-            )
+            if st.button("Run simulation", type="primary", width="stretch"):
+                st.session_state.cfg_key = None
+                st.session_state.playing = False
+                st.session_state.seek_peak = True
+                st.rerun()
 
 with center:
     m1, m2, m3 = st.columns([2.2, 1, 1])
@@ -572,7 +999,7 @@ with center:
     )
     map_state = st_folium(
         fmap,
-        height=620,
+        height=560,
         use_container_width=True,
         returned_objects=["last_object_clicked_popup", "last_object_clicked"],
         key=f"main-map-{CITY.region_id}-{st.session_state.color_mode}-{st.session_state.cfg_key}-{st.session_state.show_grid}-{st.session_state.show_labels}-{sel_id}-{t_idx}",
@@ -588,9 +1015,51 @@ with center:
             )
             st.session_state.selected_region = CITY.name_of(best)
 
+    # Timeline / playback under the map
+    st.markdown('<div class="fs-playback-mark"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="bottom-bar">', unsafe_allow_html=True)
+    st.markdown('<div class="fs-playback-label">Playback</div>', unsafe_allow_html=True)
+    p1, p2, p3, p4 = st.columns((1.15, 1.15, 2.4, 1.15), gap="small")
+    with p1:
+        play_label = "Pause" if st.session_state.playing else "Play"
+        if st.button(play_label, width="stretch", type="primary", key="play_btn"):
+            if st.session_state.t_idx >= max_idx and not st.session_state.playing:
+                st.session_state.t_idx = 0
+            st.session_state.playing = not st.session_state.playing
+            st.rerun()
+    with p2:
+        if st.button("Reset", width="stretch", key="reset_btn"):
+            st.session_state.playing = False
+            st.session_state.t_idx = 0
+            st.rerun()
+    with p3:
+        speed = st.segmented_control(
+            "SPEED",
+            options=[1, 2, 4, 8],
+            format_func=lambda x: f"{x}×",
+            key="play_speed",
+            label_visibility="collapsed",
+        )
+        if speed is None:
+            st.session_state.play_speed = 1
+    with p4:
+        st.markdown(
+            f'<div class="t-clock">{clock_label(float(result.times_h[int(st.session_state.t_idx)]))}</div>',
+            unsafe_allow_html=True,
+        )
+    st.slider(
+        "Timeline",
+        min_value=0,
+        max_value=max_idx,
+        key="t_idx",
+        label_visibility="collapsed",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
 with right:
     with st.container(border=True):
         st.markdown('<div class="panel-title">SELECTED DISTRICT</div>', unsafe_allow_html=True)
+        st.markdown('<div class="fs-district-mark"></div>', unsafe_allow_html=True)
         st.selectbox("Region", CITY.names, key="selected_region", label_visibility="collapsed")
         sel_idx = CITY.names.index(st.session_state.selected_region)
         status = int(result.status[t_idx, sel_idx])
@@ -599,6 +1068,7 @@ with right:
         color = STATUS_COLOR[status]
         ttc = float(result.time_to_critical_h[sel_idx])
         drain = CITY.drainage_mm_h[sel_idx] * result.config.drainage_scale
+        action_title, action_body, action_color = district_action(status)
         st.markdown(
             f"""
             <div class="hazard-hero" style="border-color:{color}66;box-shadow:0 0 0 1px {color}22, 0 12px 28px rgba(0,0,0,0.35);">
@@ -611,6 +1081,10 @@ with right:
                 <div class="cell"><div class="k">Population</div><div class="v">{CITY.population[sel_idx]:,}</div></div>
                 <div class="cell"><div class="k">Elevation</div><div class="v">{CITY.elevation[sel_idx]:.0f} m</div></div>
                 <div class="cell"><div class="k">Drainage</div><div class="v">{drain:.0f} mm/h</div></div>
+              </div>
+              <div class="action-callout" style="border-color:{action_color}66;background:{action_color}18;">
+                <div class="action-kicker" style="color:{action_color};">{action_title}</div>
+                <div class="action-body">{action_body}</div>
               </div>
             </div>
             """,
@@ -648,47 +1122,84 @@ with right:
             f"first critical {first if first is not None else '—'} h"
         )
 
-# ── Bottom playback bar ──────────────────────────────────────────────────
-st.markdown('<div class="bottom-bar">', unsafe_allow_html=True)
-b1, b2, b3, b4 = st.columns((1.35, 1.1, 4.2, 0.9), gap="small")
-with b1:
-    cplay, creset = st.columns(2)
-    with cplay:
-        play_label = "Pause" if st.session_state.playing else "Play"
-        if st.button(play_label, width="stretch", type="primary"):
-            if st.session_state.t_idx >= max_idx and not st.session_state.playing:
-                st.session_state.t_idx = 0
-            st.session_state.playing = not st.session_state.playing
-            st.rerun()
-    with creset:
-        if st.button("Reset", width="stretch"):
-            st.session_state.playing = False
-            st.session_state.t_idx = 0
-            st.rerun()
-with b2:
-    speed = st.segmented_control(
-        "SPEED",
-        options=[1, 2, 4, 8],
-        format_func=lambda x: f"{x}x",
-        key="play_speed",
-        label_visibility="collapsed",
+
+# ── Early warning / evacuation system ────────────────────────────────────
+danger_rows, evacuate_rows = alert_groups(CITY, result, t_idx)
+danger_pop = sum(r["population"] for r in danger_rows)
+evacuate_pop = sum(r["population"] for r in evacuate_rows)
+st.markdown('<div class="fs-main-gap"></div>', unsafe_allow_html=True)
+with st.container(border=True):
+    st.markdown('<div class="panel-title">EARLY WARNING SYSTEM</div>', unsafe_allow_html=True)
+    st.caption(
+        f"{CITY.label} · {clock_label(hours)} · "
+        f"warning ≥ {result.config.warning_m:.2f} m · evacuate ≥ {result.config.critical_m:.2f} m"
     )
-    if speed is None:
-        st.session_state.play_speed = 1
-with b3:
-    st.slider(
-        "Timeline",
-        min_value=0,
-        max_value=max_idx,
-        key="t_idx",
-        label_visibility="collapsed",
-    )
-with b4:
     st.markdown(
-        f'<div class="t-clock">{clock_label(float(result.times_h[int(st.session_state.t_idx)]))}</div>',
+        f"""
+        <div class="alert-summary">
+          <div class="alert-card warn">
+            <div class="alert-kicker">In danger · prepare</div>
+            <div class="alert-count">{len(danger_rows)}<span>districts</span></div>
+            <div class="alert-pop">{danger_pop:,} people under alert</div>
+            <div class="alert-msg">Warning depth reached — ready go-bags, move to upper floors, watch for escalation.</div>
+          </div>
+          <div class="alert-card evac">
+            <div class="alert-kicker">Evacuate now</div>
+            <div class="alert-count">{len(evacuate_rows)}<span>districts</span></div>
+            <div class="alert-pop">{evacuate_pop:,} people to evacuate</div>
+            <div class="alert-msg">Critical flooding — leave the flood zone immediately and seek higher ground.</div>
+          </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-st.markdown("</div>", unsafe_allow_html=True)
+    list_l, list_r = st.columns(2, gap="medium")
+    with list_l:
+        st.markdown("**Districts in danger**")
+        render_alert_district_buttons(danger_rows, "danger")
+    with list_r:
+        st.markdown("**Districts to evacuate**")
+        render_alert_district_buttons(evacuate_rows, "evacuate")
+
+# ── Analytics below map + timeline ───────────────────────────────────────
+sel_idx = CITY.names.index(st.session_state.selected_region)
+st.markdown('<div class="fs-main-gap"></div>', unsafe_allow_html=True)
+with st.container(border=True):
+    st.markdown('<div class="panel-title">FLOOD PROGRESSION & CAUSES</div>', unsafe_allow_html=True)
+    st.caption(
+        f"{CITY.label} · timeline {clock_label(hours)} · selected {st.session_state.selected_region}"
+    )
+    st.plotly_chart(
+        build_progression_figure(result, t_idx, sel_idx, st.session_state.selected_region),
+        use_container_width=True,
+        config={"displayModeBar": False},
+    )
+    pie_l, pie_r = st.columns(2, gap="medium")
+    with pie_l:
+        st.plotly_chart(
+            build_status_pie(result, t_idx),
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
+    with pie_r:
+        st.plotly_chart(
+            build_cause_pie(CITY, result, sel_idx, t_idx, st.session_state.selected_region),
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
+
+with st.expander("Model equations", expanded=False):
+    st.markdown(
+        r"""
+        At each step Δt:
+
+        1. **Rain** · \(w \leftarrow w + R\cdot c\cdot f\cdot \Delta t\) while raining  
+        2. **Drain** · \(w \leftarrow \max(0,\, w - D\cdot s\cdot \Delta t - I\cdot \Delta t)\)  
+        3. **Flow** · \(H = z + w\), flux \(k(H_i-H_j)\Delta t\) along edges  
+        4. **Sea / river sink** on coastal / riverfront districts  
+        5. **Class** · Safe < 0.22 m · Warning · Critical ≥ 0.60 m
+        """
+    )
 
 
 @st.fragment(run_every=timedelta(milliseconds=700) if st.session_state.playing else None)
