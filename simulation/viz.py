@@ -18,11 +18,9 @@ RISK_LABELS = {SAFE: "Safe", WARNING: "Warning", CRITICAL: "Critical"}
 
 def _depth_color(depth: float, vmax: float = 1.4) -> str:
     t = max(0.0, min(1.0, depth / vmax))
-    r = int(12 + t * 210)
-    g = int(70 + (1 - t) * 90)
-    b = int(160 + (1 - t) * 70)
-    if t < 0.08:
-        return "#1b3a4a"
+    r = int(10 + t * 20)
+    g = int(105 + t * 115)
+    b = int(165 + t * 80)
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
@@ -60,13 +58,30 @@ def build_map(
     fmap = folium.Map(
         location=list(city.center),
         zoom_start=11,
-        tiles="OpenStreetMap",
+        tiles=None,
         control_scale=True,
     )
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+        name="Satellite imagery",
+        overlay=False,
+        control=True,
+    ).add_to(fmap)
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        name="OpenStreetMap",
+        overlay=False,
+        control=True,
+    ).add_to(fmap)
     fmap.fit_bounds(city.bounds)
 
     blocked_edges = blocked_edges or (result.blocked_edges if result else ())
-    blocked = {(min(a, b), max(a, b)) for a, b in blocked_edges}
+    blocked = {
+        (min(city.index_of[a], city.index_of[b]), max(city.index_of[a], city.index_of[b]))
+        for a, b in blocked_edges
+        if a in city.index_of and b in city.index_of
+    }
     failed = set(result.failed_districts if result else ())
 
     emin = min(city.elevation)
@@ -79,21 +94,28 @@ def build_map(
         idx = city.index_of[did]
         if color_mode == "Elevation":
             color = _elev_color(city.elevation[idx], emin, emax)
+            fill_opacity = 0.28
         elif color_mode == "Water depth" and water_row is not None:
             color = _depth_color(float(water_row[idx]))
+            fill_opacity = 0.34
+        elif color_mode == "Risk":
+            color = "#d9f0ff"
+            fill_opacity = 0.0
         elif status_row is not None:
             color = RISK_COLORS[int(status_row[idx])]
+            fill_opacity = 0.0
         else:
             color = "#1ee0ac"
+            fill_opacity = 0.0
         return {
             "fillColor": color,
-            "color": "#0b1220",
-            "weight": 1.4,
-            "fillOpacity": 0.72,
+            "color": "#d9f0ff" if color_mode == "Risk" else "#8cc9dd",
+            "weight": 0.7,
+            "fillOpacity": fill_opacity,
         }
 
     def highlight_fn(_feature):
-        return {"weight": 3, "color": "#ffffff", "fillOpacity": 0.85}
+        return {"weight": 2, "color": "#ffffff", "fillOpacity": 0.18 if color_mode != "Risk" else 0.04}
 
     def popup_html(did: str) -> str:
         idx = city.index_of[did]
@@ -129,23 +151,66 @@ def build_map(
             popup=folium.Popup(popup_html(did), max_width=260),
         ).add_to(fmap)
 
-    for canal in city.canal_polylines():
-        blocked_seg = False
-        for a, b in canal["edges"]:
-            if (min(a, b), max(a, b)) in blocked:
-                blocked_seg = True
-                break
-        color = "#e74c3c" if blocked_seg else "#4cc3ff"
-        weight = 6 if blocked_seg else 3.5
-        dash = "8, 8" if blocked_seg else None
+    if color_mode == "Risk" and status_row is not None:
+        for idx, did in enumerate(city.ids):
+            label = RISK_LABELS[int(status_row[idx])]
+            lat, lon = city.centroids[did]
+            folium.CircleMarker(
+                location=[lat, lon],
+                radius=6,
+                color="#ffffff",
+                weight=1,
+                fill=True,
+                fill_color=RISK_COLORS[int(status_row[idx])],
+                fill_opacity=0.95,
+                tooltip=f"{city.names[idx]}: {label}",
+                popup=folium.Popup(popup_html(did), max_width=260),
+            ).add_to(fmap)
+
+    if result is not None and result.edge_defs and result.edge_flow.size:
+        flow_row = result.edge_flow[t_idx]
+        flow_values = [abs(float(value)) for value in flow_row]
+        max_flow = max(flow_values, default=0.0)
+        min_flow = max(1e-6, max_flow * 0.02)
+        flow_layer = folium.FeatureGroup(name="Simulated water flow", show=True)
+        for edge_idx, (i, j) in enumerate(result.edge_defs):
+            if edge_idx >= len(flow_row) or (min(i, j), max(i, j)) in blocked:
+                continue
+            flow = float(flow_row[edge_idx])
+            magnitude = abs(flow)
+            if magnitude < min_flow:
+                continue
+            start, end = (i, j) if flow >= 0.0 else (j, i)
+            start_did, end_did = city.ids[start], city.ids[end]
+            start_point = city.centroids[start_did]
+            end_point = city.centroids[end_did]
+            ratio = magnitude / max_flow if max_flow else 0.0
+            folium.PolyLine(
+                locations=[start_point, end_point],
+                color="#42d9ff",
+                weight=1.5 + 5.0 * ratio**0.5,
+                opacity=0.35 + 0.6 * ratio,
+                tooltip=(
+                    f"Flow: {city.names[start]} → {city.names[end]} · "
+                    f"{magnitude:.3f} m³/s"
+                ),
+            ).add_to(flow_layer)
+        flow_layer.add_to(fmap)
+
+    blocked_layer = folium.FeatureGroup(name="Blocked edges", show=True)
+    for i, j in blocked:
+        start_did, end_did = city.ids[i], city.ids[j]
+        start_point = city.centroids[start_did]
+        end_point = city.centroids[end_did]
         folium.PolyLine(
-            locations=canal["coords"],
-            color=color,
-            weight=weight,
-            opacity=0.9,
-            dash_array=dash,
-            tooltip=("BLOCKED · " if blocked_seg else "") + canal["name"],
-        ).add_to(fmap)
+            locations=[start_point, end_point],
+            color="#f06b6b",
+            weight=2.5,
+            opacity=0.75,
+            dash_array="6, 8",
+            tooltip=f"BLOCKED · {city.names[i]} – {city.names[j]}",
+        ).add_to(blocked_layer)
+    blocked_layer.add_to(fmap)
 
     if color_mode == "Risk":
         legend = _legend_html(
@@ -164,6 +229,7 @@ def build_map(
         )
     fmap.get_root().html.add_child(folium.Element(legend))
     Fullscreen().add_to(fmap)
+    folium.LayerControl(collapsed=False).add_to(fmap)
 
     if color_mode == "Elevation":
         colormap = cm.LinearColormap(["#285846", "#b4d25a"], vmin=emin, vmax=emax, caption="Elevation (m)")
