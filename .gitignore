@@ -16,3 +16,6 @@ Thumbs.db
 *.log
 .idea/
 .vscode/
+web/node_modules/
+web/dist/
+analysis/output/

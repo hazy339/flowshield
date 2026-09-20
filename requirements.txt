@@ -1,7 +1,10 @@
 streamlit>=1.32.0
 numpy>=1.26.0
 pandas>=2.1.0
+matplotlib>=3.8.0
 folium>=0.16.0
 streamlit-folium>=0.20.0
 plotly>=5.18.0
 branca>=0.7.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
