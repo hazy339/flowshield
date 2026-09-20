@@ -9,6 +9,7 @@ Flood simulation and early-warning dashboard for Indian city basins. Built to th
 | Mathematical modelling & numerical simulation | **Python** + **NumPy** (`simulation/`) |
 | Numerical computation & analysis | **Pandas** + **Matplotlib** (`analysis/plots.py`) |
 | Visualization | **React** (`web/`) and/or **Streamlit** (`app.py`) |
+| AI development assist | **Cursor** (Composer agent) — used to help scaffold UI, API wiring, docs, and debug; flood math remains the Python/NumPy engine above |
 
 Districts overlay satellite imagery; water levels evolve from rainfall, terrain, drainage, and nonlinear channel flow.
 
