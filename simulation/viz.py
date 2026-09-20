@@ -285,13 +285,50 @@ def _flow_style(magnitude: float, f_ref: float) -> dict:
     }
 
 
+def _land_flood_style(depth: float, status: int, warning_m: float, critical_m: float) -> dict:
+    """Soft translucent water fill clipped to land polygons (never ocean)."""
+    t = max(0.0, min(1.0, depth / max(critical_m * 1.35, 0.35))) ** 0.7
+    if depth < 0.05 and status < WARNING:
+        return {
+            "fillColor": "#ffffff",
+            "color": "#ffffff",
+            "weight": 0.8,
+            "fillOpacity": 0.02,
+            "opacity": 0.14,
+            "dashArray": "2, 7",
+        }
+    if status >= CRITICAL or depth >= critical_m:
+        return {
+            "fillColor": "#1a8cff",
+            "color": "#6eb6ff",
+            "weight": 1.1,
+            "fillOpacity": 0.22 + 0.20 * t,
+            "opacity": 0.55,
+        }
+    if status >= WARNING or depth >= warning_m:
+        return {
+            "fillColor": "#2aa9ff",
+            "color": "#7ed0ff",
+            "weight": 1.0,
+            "fillOpacity": 0.14 + 0.16 * t,
+            "opacity": 0.45,
+        }
+    return {
+        "fillColor": "#3ec7ff",
+        "color": "#9ae0ff",
+        "weight": 0.9,
+        "fillOpacity": 0.08 + 0.10 * t,
+        "opacity": 0.35,
+    }
+
+
 def _add_flood_surface(
     fmap: folium.Map,
     city: City,
     result: SimulationResult | None,
     t_idx: int,
 ) -> None:
-    """Soft circular inundation blobs — not rectangular blue tiles."""
+    """Flood accumulation clipped strictly to region land polygons — never ocean."""
     outlines = folium.FeatureGroup(name="District outlines", show=True)
     flood = folium.FeatureGroup(name="Flood surface", show=True)
 
@@ -318,44 +355,92 @@ def _add_flood_surface(
     warning_m = float(result.config.warning_m)
     critical_m = float(result.config.critical_m)
 
-    for did, (lat, lon) in city.centroids.items():
+    for feat in city.geojson["features"]:
+        did = feat["properties"]["id"]
+        if did not in city.index_of:
+            continue
         idx = city.index_of[did]
         depth = float(result.water[t, idx])
         status = int(result.status[t, idx])
+        # Skip dry/safe empty fill — outlines already show the footprint.
         if depth < 0.05 and status < WARNING:
             continue
-        t_depth = max(0.0, min(1.0, depth / max(critical_m * 1.4, 0.4))) ** 0.7
-        if status >= CRITICAL or depth >= critical_m:
-            base_r = 520 + 2100 * t_depth
-            color = "#4db8ff"
-            fill = "#1a8cff"
-            op = 0.16 + 0.18 * t_depth
-        elif status >= WARNING or depth >= warning_m:
-            base_r = 420 + 1600 * t_depth
-            color = "#6ecfff"
-            fill = "#2aa9ff"
-            op = 0.12 + 0.14 * t_depth
-        else:
-            base_r = 320 + 900 * t_depth
-            color = "#8ad9ff"
-            fill = "#3ec7ff"
-            op = 0.07 + 0.10 * t_depth
-
+        style = _land_flood_style(depth, status, warning_m, critical_m)
         name = city.names[idx]
-        for scale, op_mul in ((1.35, 0.35), (1.0, 0.7), (0.55, 1.0)):
-            folium.Circle(
-                location=[lat, lon],
-                radius=base_r * scale,
-                color=color,
-                weight=0,
-                fill=True,
-                fill_color=fill,
-                fill_opacity=op * op_mul,
-                opacity=0,
-                tooltip=f"{name} · {depth:.2f} m water" if scale == 1.0 else None,
-            ).add_to(flood)
+        folium.GeoJson(
+            feat,
+            style_function=lambda _f, s=style: {
+                "fillColor": s["fillColor"],
+                "color": s["color"],
+                "weight": s["weight"],
+                "fillOpacity": s["fillOpacity"],
+                "opacity": s["opacity"],
+                "dashArray": s.get("dashArray"),
+            },
+            tooltip=folium.Tooltip(f"{name} · {depth:.2f} m water", sticky=False),
+            interactive=True,
+        ).add_to(flood)
 
     flood.add_to(fmap)
+
+
+def _nearest_path_index(path: list[list[float]], lat: float, lon: float) -> int:
+    best_i = 0
+    best_d = float("inf")
+    for i, (plat, plon) in enumerate(path):
+        d = (plat - lat) ** 2 + (plon - lon) ** 2
+        if d < best_d:
+            best_d = d
+            best_i = i
+    return best_i
+
+
+def _canal_segment_paths(city: City) -> dict[tuple[str, str], dict]:
+    """
+    Slice approximate river polylines onto existing canal edges.
+    Keys are undirected (id_a, id_b). Display-only — F_ij unchanged.
+    """
+    lookup: dict[tuple[str, str], dict] = {}
+    for canal in city.canals:
+        districts = [d for d in canal.get("districts", []) if d in city.centroids]
+        if len(districts) < 2:
+            continue
+        if canal.get("path"):
+            coords = [[float(lat), float(lon)] for lat, lon in canal["path"]]
+        else:
+            coords = []
+            for did in districts:
+                lat, lon = city.centroids[did]
+                coords.append([lat, lon])
+            if canal.get("sea") and coords:
+                lon, lat = canal["sea"]
+                coords.append([lat, lon])
+        if len(coords) < 2:
+            continue
+
+        # Project each district onto the river path; keep indices non-decreasing.
+        indices: list[int] = []
+        for did in districts:
+            lat, lon = city.centroids[did]
+            idx = _nearest_path_index(coords, lat, lon)
+            if indices and idx <= indices[-1]:
+                idx = min(len(coords) - 1, indices[-1] + 1)
+            indices.append(idx)
+
+        for k, (a, b) in enumerate(zip(districts, districts[1:])):
+            i0, i1 = indices[k], indices[k + 1]
+            if i1 <= i0:
+                i1 = min(len(coords) - 1, i0 + 1)
+            segment = coords[i0 : i1 + 1]
+            if len(segment) < 2:
+                segment = [coords[i0], coords[min(i0 + 1, len(coords) - 1)]]
+            key = (a, b) if a <= b else (b, a)
+            lookup[key] = {
+                "coords": segment,
+                "name": canal["name"],
+                "canal_id": canal["id"],
+            }
+    return lookup
 
 
 def _add_simulated_flows(
@@ -366,10 +451,13 @@ def _add_simulated_flows(
     blocked: set[tuple[str, str]],
     selected_id: str | None,
 ) -> None:
-    """Curved visual interpolation of existing F_ij edges — not new/fake paths."""
-    glow_group = folium.FeatureGroup(name="Flow glow", show=True)
-    flow_group = folium.FeatureGroup(name="Flood flow", show=True)
+    """
+    Dotted F_ij animation along approximate river corridors only.
+    Overland neighbour edges are not drawn (avoids the grid/highway look).
+    """
+    river_group = folium.FeatureGroup(name="River flow", show=True)
     blocked_group = folium.FeatureGroup(name="Blocked channels", show=True)
+    canal_paths = _canal_segment_paths(city)
 
     drawn_blocked: set[tuple[str, str]] = set()
     for a, b in blocked:
@@ -377,21 +465,26 @@ def _add_simulated_flows(
         if key in drawn_blocked or a not in city.centroids or b not in city.centroids:
             continue
         drawn_blocked.add(key)
-        lat_a, lon_a = city.centroids[a]
-        lat_b, lon_b = city.centroids[b]
-        curve = _curved_flow_coords(lat_a, lon_a, lat_b, lon_b, f"blocked|{key[0]}|{key[1]}")
+        seg = canal_paths.get(key)
+        if seg:
+            path = list(seg["coords"])
+            tip = f"BLOCKED · {seg['name']}"
+        else:
+            lat_a, lon_a = city.centroids[a]
+            lat_b, lon_b = city.centroids[b]
+            path = [[lat_a, lon_a], [lat_b, lon_b]]
+            tip = f"BLOCKED · {city.name_of(a)} – {city.name_of(b)}"
         folium.PolyLine(
-            locations=curve,
+            locations=path,
             color="#ff6b5a",
-            weight=2.6,
-            opacity=0.7,
-            dash_array="5, 9",
-            tooltip=f"BLOCKED · {city.name_of(a)} – {city.name_of(b)}",
+            weight=2.4,
+            opacity=0.75,
+            dash_array="2, 8",
+            tooltip=tip,
         ).add_to(blocked_group)
 
     if result is None or result.n_edges == 0:
-        glow_group.add_to(fmap)
-        flow_group.add_to(fmap)
+        river_group.add_to(fmap)
         blocked_group.add_to(fmap)
         return
 
@@ -413,53 +506,41 @@ def _add_simulated_flows(
         key = (id_i, id_j) if id_i <= id_j else (id_j, id_i)
         if key in drawn_blocked or (id_i, id_j) in blocked or (id_j, id_i) in blocked:
             continue
+        seg = canal_paths.get(key)
+        if seg is None:
+            # Skip overland graph edges — only river corridors are drawn.
+            continue
         f = float(flows[e])
         mag = abs(f)
         if mag < f_min:
             continue
 
-        lat_i, lon_i = city.centroids[id_i]
-        lat_j, lon_j = city.centroids[id_j]
-        edge_seed = f"{id_i}|{id_j}"
-        if f >= 0:
-            curve = _curved_flow_coords(lat_i, lon_i, lat_j, lon_j, edge_seed)
-            src_name, dst_name = result.district_names[i], result.district_names[j]
-        else:
-            curve = _curved_flow_coords(lat_j, lon_j, lat_i, lon_i, edge_seed)
-            src_name, dst_name = result.district_names[j], result.district_names[i]
-
         style = _flow_style(mag, f_ref)
         touches_sel = sel_idx is not None and sel_idx in (i, j)
-        color = "#6ecfff" if not touches_sel else "#a8eaff"
-        pulse = "#d7f6ff"
-        weight = style["weight"] + (0.6 if touches_sel else 0.0)
-        opacity = min(0.78, style["opacity"] + (0.08 if touches_sel else 0.0))
-
-        folium.PolyLine(
-            locations=curve,
-            color="#3dbfff",
-            weight=style["glow_weight"],
-            opacity=style["glow_opacity"],
-            line_cap="round",
-            line_join="round",
-            interactive=False,
-        ).add_to(glow_group)
-
-        tip = f"{src_name} -> {dst_name} · {mag:.1f} m3/s"
+        path = list(seg["coords"])
+        if f < 0:
+            path = list(reversed(path))
+        src_name, dst_name = (
+            (result.district_names[i], result.district_names[j])
+            if f >= 0
+            else (result.district_names[j], result.district_names[i])
+        )
+        weight = min(5.0, 2.0 + 2.8 * style["intensity"] + (0.4 if touches_sel else 0.0))
+        opacity = min(0.82, 0.42 + 0.32 * style["intensity"])
+        tip = f"{seg['name']}: {src_name} → {dst_name} · {mag:.1f} m³/s"
         AntPath(
-            locations=curve,
-            color=color,
+            locations=path,
+            color="#7ec8ff" if not touches_sel else "#b8f0ff",
             weight=weight,
             opacity=opacity,
             delay=style["delay"],
-            dash_array=[7, 18],
-            pulse_color=pulse,
+            dash_array=[2, 10],
+            pulse_color="#e8f9ff",
             hardwareAcceleration=True,
             tooltip=tip,
-        ).add_to(flow_group)
+        ).add_to(river_group)
 
-    glow_group.add_to(fmap)
-    flow_group.add_to(fmap)
+    river_group.add_to(fmap)
     blocked_group.add_to(fmap)
 
 
@@ -496,20 +577,19 @@ def _marker_html(
     name: str | None,
     depth: float | None,
 ) -> str:
-    core = 13 if selected else (12 if status == CRITICAL else 10 if status == WARNING else 7)
-    halo = 0
+    # Keep Safe / Warning / Critical clearly readable from simulated status colours.
     if status == CRITICAL:
-        halo = 38 if selected else 32
-    elif status == WARNING:
-        halo = 30 if selected else 24
-    elif selected:
-        halo = 22
-
-    if status == CRITICAL:
+        core = 13 if selected else 12
+        halo = 36 if selected else 30
         pulse_cls = "fs-pulse-dot"
     elif status == WARNING:
+        core = 12 if selected else 10
+        halo = 28 if selected else 22
         pulse_cls = "fs-pulse-warn"
     else:
+        # SAFE (green) — still visible, not oversized
+        core = 11 if selected else 9
+        halo = 20 if selected else 16
         pulse_cls = ""
 
     halo_html = ""
@@ -518,7 +598,7 @@ def _marker_html(
             f'<div style="position:absolute;left:50%;top:50%;width:{halo}px;height:{halo}px;'
             f'margin:{-halo / 2}px 0 0 {-halo / 2}px;border-radius:50%;'
             f'background:{color}44;border:1px solid {color}88;'
-            f'box-shadow:0 0 18px {color}66;"></div>'
+            f'box-shadow:0 0 14px {color}55;"></div>'
         )
 
     label_html = ""
@@ -544,7 +624,7 @@ def _marker_html(
         f'<div class="{pulse_cls}" style="position:absolute;left:50%;top:50%;'
         f"width:{core}px;height:{core}px;margin:{-core / 2}px 0 0 {-core / 2}px;"
         f"border-radius:50%;background:{color};border:2px solid rgba(255,255,255,0.95);"
-        f'box-shadow:0 0 16px {color}dd, 0 0 28px {color}66;"></div>'
+        f'box-shadow:0 0 14px {color}cc, 0 0 22px {color}55;"></div>'
         f"{label_html}</div>"
     )
 

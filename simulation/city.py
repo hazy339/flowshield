@@ -184,15 +184,18 @@ class City:
     def canal_polylines(self) -> list[dict]:
         lines = []
         for canal in self.canals:
-            coords: list[list[float]] = []
-            for did in canal["districts"]:
-                if did not in self.centroids:
-                    continue
-                lat, lon = self.centroids[did]
-                coords.append([lat, lon])
-            if canal.get("sea") and coords:
-                lon, lat = canal["sea"]
-                coords.append([lat, lon])
+            if canal.get("path"):
+                coords = [[float(lat), float(lon)] for lat, lon in canal["path"]]
+            else:
+                coords = []
+                for did in canal["districts"]:
+                    if did not in self.centroids:
+                        continue
+                    lat, lon = self.centroids[did]
+                    coords.append([lat, lon])
+                if canal.get("sea") and coords:
+                    lon, lat = canal["sea"]
+                    coords.append([lat, lon])
             if len(coords) < 2:
                 continue
             lines.append(
@@ -200,6 +203,7 @@ class City:
                     "id": canal["id"],
                     "name": canal["name"],
                     "coords": coords,
+                    "districts": list(canal["districts"]),
                     "edges": list(zip(canal["districts"], canal["districts"][1:])),
                 }
             )
@@ -207,10 +211,89 @@ class City:
 
 
 CHENNAI_CANALS = [
-    {"id": "cooum", "name": "Cooum River", "districts": ["ambattur", "anna_nagar", "perambur", "tondiarpet"], "sea": [80.325, 13.15]},
-    {"id": "adyar_river", "name": "Adyar River", "districts": ["pallavaram", "guindy", "adyar"], "sea": [80.325, 12.995]},
-    {"id": "buckingham", "name": "Buckingham Canal", "districts": ["tondiarpet", "mylapore", "adyar", "sholinganallur"], "sea": None},
-    {"id": "south_canal", "name": "Velachery Drain", "districts": ["tambaram", "velachery", "adyar"], "sea": None},
+    {
+        "id": "cooum",
+        "name": "Cooum River",
+        "districts": ["ambattur", "anna_nagar", "perambur", "tondiarpet"],
+        "sea": [80.325, 13.15],
+        # Approximate Cooum corridor [lat, lon] — display only, not survey-grade.
+        "path": [
+            [13.155, 80.128],
+            [13.150, 80.145],
+            [13.142, 80.162],
+            [13.128, 80.178],
+            [13.112, 80.192],
+            [13.098, 80.208],
+            [13.090, 80.225],
+            [13.088, 80.242],
+            [13.092, 80.258],
+            [13.100, 80.272],
+            [13.112, 80.285],
+            [13.125, 80.298],
+            [13.138, 80.312],
+            [13.148, 80.322],
+        ],
+    },
+    {
+        "id": "adyar_river",
+        "name": "Adyar River",
+        "districts": ["pallavaram", "guindy", "adyar"],
+        "sea": [80.325, 12.995],
+        # Approximate Adyar corridor [lat, lon].
+        "path": [
+            [13.005, 80.135],
+            [12.995, 80.155],
+            [12.985, 80.175],
+            [12.978, 80.195],
+            [12.975, 80.215],
+            [12.980, 80.235],
+            [12.988, 80.252],
+            [12.995, 80.268],
+            [12.998, 80.285],
+            [12.995, 80.302],
+            [12.992, 80.318],
+            [12.995, 80.325],
+        ],
+    },
+    {
+        "id": "buckingham",
+        "name": "Buckingham Canal",
+        "districts": ["tondiarpet", "mylapore", "adyar", "sholinganallur"],
+        "sea": None,
+        # Coastal north–south canal, slight meander.
+        "path": [
+            [13.155, 80.298],
+            [13.140, 80.300],
+            [13.120, 80.302],
+            [13.095, 80.305],
+            [13.070, 80.308],
+            [13.045, 80.310],
+            [13.020, 80.308],
+            [12.995, 80.305],
+            [12.970, 80.300],
+            [12.945, 80.295],
+            [12.920, 80.290],
+            [12.905, 80.288],
+        ],
+    },
+    {
+        "id": "south_canal",
+        "name": "Velachery Drain",
+        "districts": ["tambaram", "velachery", "adyar"],
+        "sea": None,
+        "path": [
+            [12.980, 80.140],
+            [12.965, 80.155],
+            [12.950, 80.175],
+            [12.940, 80.195],
+            [12.938, 80.215],
+            [12.945, 80.235],
+            [12.960, 80.250],
+            [12.975, 80.265],
+            [12.988, 80.278],
+            [12.995, 80.290],
+        ],
+    },
 ]
 
 CHENNAI_BLOCKABLE = [
