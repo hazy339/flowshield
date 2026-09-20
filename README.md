@@ -19,10 +19,10 @@ Python 3.10+ recommended.
 ```bash
 cd flood
 py -3 -m pip install -r requirements.txt
-py -3 -m streamlit run app.py
+py -3 -m streamlit run app.py --server.port 8502
 ```
 
-The dashboard opens at [http://localhost:8501](http://localhost:8501).
+The dashboard opens at [http://localhost:8502](http://localhost:8502).
 
 Map tiles use **Google Earth-style satellite / hybrid** imagery. An internet connection is needed for tiles to load.
 
