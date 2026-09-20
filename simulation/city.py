@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -101,6 +102,24 @@ def _polygon_centroid(ring: list[list[float]]) -> tuple[float, float]:
     return (sum(ys) / len(ys), sum(xs) / len(xs))
 
 
+def _polygon_area_m2(ring: list[list[float]]) -> float:
+    """Planar area [m²] from a lon/lat ring using local equirectangular metres."""
+    pts = ring[:-1] if len(ring) > 1 and ring[0] == ring[-1] else ring
+    if len(pts) < 3:
+        return 1.0
+    lat0 = sum(p[1] for p in pts) / len(pts)
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lon = 111_320.0 * max(0.2, math.cos(math.radians(lat0)))
+    xs = [(p[0] - pts[0][0]) * m_per_deg_lon for p in pts]
+    ys = [(p[1] - pts[0][1]) * m_per_deg_lat for p in pts]
+    area = 0.0
+    n = len(xs)
+    for i in range(n):
+        j = (i + 1) % n
+        area += xs[i] * ys[j] - xs[j] * ys[i]
+    return max(abs(area) * 0.5, 1.0)
+
+
 def _cell_polygon(lon0: float, lat0: float, lon1: float, lat1: float) -> list[list[float]]:
     return [[lon0, lat0], [lon1, lat0], [lon1, lat1], [lon0, lat1], [lon0, lat0]]
 
@@ -119,6 +138,7 @@ class City:
     canal_edges: list[tuple[int, int]]
     geojson: dict
     centroids: dict[str, tuple[float, float]]
+    area_m2: list[float] = field(default_factory=list)
     canals: list[dict] = field(default_factory=list)
     blockable_channels: list[dict] = field(default_factory=list)
     region_id: str = "chennai"
@@ -130,6 +150,10 @@ class City:
 
     def __post_init__(self) -> None:
         self.index_of = {did: i for i, did in enumerate(self.ids)}
+        if not self.area_m2 or len(self.area_m2) != len(self.ids):
+            self.area_m2 = [
+                _polygon_area_m2(feat["geometry"]["coordinates"][0]) for feat in self.geojson["features"]
+            ]
         lats = [lat for lat, _ in self.centroids.values()]
         lons = [lon for _, lon in self.centroids.values()]
         self.center = (sum(lats) / len(lats), sum(lons) / len(lons))
@@ -253,6 +277,8 @@ def _build_city_from_tables(
                 seen.add(key)
                 canal_edges.append(key)
 
+    area_m2 = [_polygon_area_m2(feat["geometry"]["coordinates"][0]) for feat in geojson["features"]]
+
     return City(
         ids=ids,
         names=names,
@@ -266,6 +292,7 @@ def _build_city_from_tables(
         canal_edges=canal_edges,
         geojson=geojson,
         centroids=centroids,
+        area_m2=area_m2,
         canals=canals,
         blockable_channels=blockable,
         region_id=region_id,
