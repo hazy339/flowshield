@@ -1,30 +1,23 @@
 # FLOWSHIELD Web (React)
 
-React visualization front end for the Python/NumPy flood engine.
+React visualization for the Python/NumPy flood engine.
 
-## Stack (as suggested)
+Full install guide (clone, prerequisites, Windows/macOS/Linux): see the root [README.md](../README.md).
 
-| Layer | Tech |
-| --- | --- |
-| Mathematical modelling | Python + NumPy (`simulation/`) |
-| Analysis | Pandas + Matplotlib (`analysis/plots.py`) |
-| Visualization | **React** (this app) — Streamlit (`app.py`) remains available |
+## Quick start (after cloning)
 
-## Run
-
-Terminal 1 — API:
+**Terminal 1** — from repo root:
 
 ```bash
 py -3 -m pip install -r requirements.txt
 py -3 -m uvicorn api.main:app --reload --port 8000
 ```
 
-Terminal 2 — React:
+**Terminal 2** — from `web/`:
 
 ```bash
-cd web
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173 (Vite proxies `/api` → `:8000`).
+Open http://localhost:5173 (proxies `/api` → `:8000`).
