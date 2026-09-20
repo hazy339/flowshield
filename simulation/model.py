@@ -147,11 +147,15 @@ def run_simulation(city: City, cfg: SimConfig) -> SimulationResult:
         surface = elev + w
         transfer = np.zeros(n, dtype=float)
         for i, j, k in edges:
-            flux = k * (surface[i] - surface[j]) * dt
-            if flux > 0:
+            H = surface[i] - surface[j]
+            if H > 0:
+                flux = k * np.sqrt(H) * dt
                 flux = min(flux, w[i] * cfg.max_transfer_frac)
-            else:
+            elif H < 0:
+                flux = -k * np.sqrt(-H) * dt
                 flux = max(flux, -w[j] * cfg.max_transfer_frac)
+            else:
+                flux = 0.0
             transfer[i] -= flux
             transfer[j] += flux
         w = np.maximum(0.0, w + transfer)
