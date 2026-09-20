@@ -3,7 +3,7 @@ from __future__ import annotations
 import branca.colormap as cm
 import folium
 from folium.features import GeoJsonTooltip
-from folium.plugins import Fullscreen
+from folium.plugins import Fullscreen, PolyLineTextPath
 
 from .city import City
 from .model import CRITICAL, SAFE, WARNING, SimulationResult
@@ -43,9 +43,25 @@ def _legend_html(title: str, items: list[tuple[str, str]]) -> str:
     return (
         f'<div style="position:fixed;bottom:24px;left:24px;z-index:9999;background:rgba(11,18,32,0.92);'
         f'color:#e8eef7;padding:10px 12px;border-radius:10px;font-size:12px;'
-        f'border:1px solid rgba(30,224,172,0.25);min-width:150px;">'
-        f'<div style="font-weight:700;margin-bottom:6px;letter-spacing:0.04em;">{title}</div>{rows}</div>'
+        f'border:1px solid rgba(30,224,172,0.25);min-width:150px;'
+        f'"><div style="font-weight:700;margin-bottom:6px;letter-spacing:0.04em;">{title}</div>{rows}</div>'
     )
+
+
+def _hazard_icon(status: int) -> folium.DivIcon:
+    color = RISK_COLORS.get(status, RISK_COLORS[SAFE])
+    opacity = 0.58 if status == SAFE else 0.9
+    shadow = "none" if status == SAFE else "drop-shadow(0 0 10px rgba(255,255,255,0.7))"
+    html = (
+        '<div style="width:18px;height:18px;position:relative;'
+        f'opacity:{opacity};filter:{shadow};">'
+        f'<div style="width:14px;height:14px;background:{color};border:2px solid #fff;'
+        'border-radius:50% 50% 50% 0;transform:rotate(-45deg);position:absolute;'
+        'left:1px;top:1px;box-sizing:border-box;">'
+        '<div style="width:4px;height:4px;border-radius:50%;background:rgba(11,18,32,0.55);'
+        'position:absolute;left:3px;top:3px;"></div></div></div>'
+    )
+    return folium.DivIcon(html=html, icon_size=(18, 18), icon_anchor=(9, 18))
 
 
 def build_map(
@@ -58,22 +74,10 @@ def build_map(
     fmap = folium.Map(
         location=list(city.center),
         zoom_start=11,
-        tiles=None,
-        control_scale=True,
-    )
-    folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         attr="Esri, Maxar, Earthstar Geographics, and the GIS User Community",
-        name="Satellite imagery",
-        overlay=False,
-        control=True,
-    ).add_to(fmap)
-    folium.TileLayer(
-        tiles="OpenStreetMap",
-        name="OpenStreetMap",
-        overlay=False,
-        control=True,
-    ).add_to(fmap)
+        control_scale=True,
+    )
     fmap.fit_bounds(city.bounds)
 
     blocked_edges = blocked_edges or (result.blocked_edges if result else ())
@@ -155,14 +159,9 @@ def build_map(
         for idx, did in enumerate(city.ids):
             label = RISK_LABELS[int(status_row[idx])]
             lat, lon = city.centroids[did]
-            folium.CircleMarker(
+            folium.Marker(
                 location=[lat, lon],
-                radius=6,
-                color="#ffffff",
-                weight=1,
-                fill=True,
-                fill_color=RISK_COLORS[int(status_row[idx])],
-                fill_opacity=0.95,
+                icon=_hazard_icon(int(status_row[idx])),
                 tooltip=f"{city.names[idx]}: {label}",
                 popup=folium.Popup(popup_html(did), max_width=260),
             ).add_to(fmap)
@@ -172,7 +171,6 @@ def build_map(
         flow_values = [abs(float(value)) for value in flow_row]
         max_flow = max(flow_values, default=0.0)
         min_flow = max(1e-6, max_flow * 0.02)
-        flow_layer = folium.FeatureGroup(name="Simulated water flow", show=True)
         for edge_idx, (i, j) in enumerate(result.edge_defs):
             if edge_idx >= len(flow_row) or (min(i, j), max(i, j)) in blocked:
                 continue
@@ -185,7 +183,7 @@ def build_map(
             start_point = city.centroids[start_did]
             end_point = city.centroids[end_did]
             ratio = magnitude / max_flow if max_flow else 0.0
-            folium.PolyLine(
+            flow_line = folium.PolyLine(
                 locations=[start_point, end_point],
                 color="#42d9ff",
                 weight=1.5 + 5.0 * ratio**0.5,
@@ -194,10 +192,15 @@ def build_map(
                     f"Flow: {city.names[start]} → {city.names[end]} · "
                     f"{magnitude:.3f} m³/s"
                 ),
-            ).add_to(flow_layer)
-        flow_layer.add_to(fmap)
+            ).add_to(fmap)
+            PolyLineTextPath(
+                flow_line,
+                "▶",
+                repeat=True,
+                offset=7,
+                attributes={"fill": "#b8f4ff", "font-size": "12"},
+            ).add_to(fmap)
 
-    blocked_layer = folium.FeatureGroup(name="Blocked edges", show=True)
     for i, j in blocked:
         start_did, end_did = city.ids[i], city.ids[j]
         start_point = city.centroids[start_did]
@@ -209,8 +212,7 @@ def build_map(
             opacity=0.75,
             dash_array="6, 8",
             tooltip=f"BLOCKED · {city.names[i]} – {city.names[j]}",
-        ).add_to(blocked_layer)
-    blocked_layer.add_to(fmap)
+        ).add_to(fmap)
 
     if color_mode == "Risk":
         legend = _legend_html(
@@ -220,7 +222,7 @@ def build_map(
     elif color_mode == "Water depth":
         legend = _legend_html(
             "Water depth",
-            [("0.0 m", "#1b3a4a"), ("0.4 m", "#2a6a9a"), ("0.8 m", "#3a80b0"), ("1.4 m+", "#de4a4a")],
+            [("0.0 m", _depth_color(0.0)), ("0.4 m", _depth_color(0.4)), ("0.8 m", _depth_color(0.8)), ("1.4 m+", _depth_color(1.4))],
         )
     else:
         legend = _legend_html(
@@ -229,7 +231,6 @@ def build_map(
         )
     fmap.get_root().html.add_child(folium.Element(legend))
     Fullscreen().add_to(fmap)
-    folium.LayerControl(collapsed=False).add_to(fmap)
 
     if color_mode == "Elevation":
         colormap = cm.LinearColormap(["#285846", "#b4d25a"], vmin=emin, vmax=emax, caption="Elevation (m)")
